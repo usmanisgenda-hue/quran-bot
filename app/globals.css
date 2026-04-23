@@ -1,0 +1,243 @@
+@import "tailwindcss";
+
+/* =========================
+   ROOT COLORS
+========================= */
+:root {
+  --background: #0a2f2d;
+  --foreground: #ededed;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: Arial, Helvetica, sans-serif;
+}
+
+/* =========================
+   CURSOR BLINK
+========================= */
+@keyframes qa-blink {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+
+.qa-cursor {
+  display: inline-block;
+  margin-left: 2px;
+  animation: qa-blink 1s step-end infinite;
+}
+
+/* =========================
+   GOLD TITLE FADE
+========================= */
+@keyframes fadeInGolden {
+  0% {
+    opacity: 0;
+    transform: translateY(15px);
+    filter: blur(8px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+    filter: blur(0);
+  }
+}
+
+.fade-in-gold {
+  opacity: 0;
+  animation: fadeInGolden 1.4s ease-out forwards;
+  animation-delay: 0.25s;
+}
+
+/* =========================
+   KAABA CINEMATIC ZOOM
+========================= */
+@keyframes kaabaZoom {
+  0% {
+    opacity: 0;
+    transform: scale(1.12);
+    filter: blur(12px);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1.05);
+    filter: blur(0);
+  }
+}
+
+.fade-in-kaaba {
+  opacity: 0;
+  animation: kaabaZoom 2.2s ease-out forwards;
+}
+
+/* =========================
+   MIC GLOW
+========================= */
+@keyframes micGlow {
+  0% {
+    box-shadow: 0 0 0px rgba(255, 0, 0, 0.3);
+    transform: scale(1);
+  }
+  50% {
+    box-shadow: 0 0 35px rgba(255, 0, 0, 0.9);
+    transform: scale(1.12);
+  }
+  100% {
+    box-shadow: 0 0 0px rgba(255, 0, 0, 0.3);
+    transform: scale(1);
+  }
+}
+
+.mic-glow {
+  animation: micGlow 1.3s ease-in-out infinite;
+}
+
+/* =========================
+   GOLD HOVER GLOW
+========================= */
+.gold-glow {
+  transition: box-shadow 0.3s ease, transform 0.2s ease;
+}
+
+.gold-glow:hover {
+  box-shadow: 0 0 20px rgba(212, 175, 55, 0.55);
+}
+
+/* =========================
+   CHAT BUBBLE ENTRY
+========================= */
+@keyframes bubbleFade {
+  0% {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.chat-bubble {
+  animation: bubbleFade 0.4s ease-out;
+}
+
+/* =========================
+   BUTTON PRESS FEEL
+========================= */
+.button-press {
+  transition: transform 0.15s ease, box-shadow 0.2s ease;
+}
+
+.button-press:active {
+  transform: scale(0.95);
+}
+
+/* =========================
+   TYPING REVEAL
+========================= */
+.typing-reveal {
+  will-change: contents;
+}
+
+/* =========================
+   PREMIUM SCROLLBARS
+========================= */
+
+/* Firefox */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #d4af37 #062927;
+}
+
+/* Global fallback */
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+/* Targeted */
+.qa-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: #d4af37 #062927;
+}
+
+.qa-scroll::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+.qa-scroll::-webkit-scrollbar-track {
+  background: linear-gradient(180deg, #052b2a 0%, #073533 100%);
+  border-radius: 999px;
+}
+
+.qa-scroll::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, #e0bb4b 0%, #b98b16 100%);
+  border-radius: 999px;
+  border: 2px solid #073533;
+}
+
+.qa-scroll::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, #f3d46a 0%, #c9981d 100%);
+}
+
+/* =========================
+   🔥 NEW: SMOOTH UI SYSTEM
+========================= */
+
+/* Panel transitions (homepage ↔ chat) */
+.qa-panel-transition {
+  transition:
+    opacity 0.5s ease,
+    transform 0.5s ease,
+    filter 0.5s ease;
+}
+
+.qa-panel-hidden {
+  opacity: 0;
+  transform: translateY(25px) scale(0.97);
+  filter: blur(4px);
+  pointer-events: none;
+}
+
+.qa-panel-visible {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  filter: blur(0);
+  pointer-events: auto;
+}
+
+/* Image hover (feels premium) */
+.qa-image-hover {
+  transition:
+    transform 0.25s ease,
+    box-shadow 0.25s ease;
+}
+
+.qa-image-hover:hover {
+  transform: scale(1.02);
+  box-shadow: 0 0 28px rgba(212, 175, 55, 0.18);
+}
+
+/* Modal backdrop (fullscreen image) */
+.qa-modal-backdrop {
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+/* Soft entrance */
+@keyframes qaFadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.qa-enter {
+  animation: qaFadeUp 0.45s ease-out;
+}

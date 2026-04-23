@@ -1,0 +1,37 @@
+[
+  {
+    "surahNumber": 1,
+    "surahName": "Al-Fatihah",
+    "ayahNumber": 1,
+    "arabicText": "بِسْمِ اللَّهِ الرَّحْمَٰنِ الرَّحِيمِ",
+    "translation": "In the name of Allah, the Entirely Merciful, the Especially Merciful."
+  },
+  {
+    "surahNumber": 1,
+    "surahName": "Al-Fatihah",
+    "ayahNumber": 2,
+    "arabicText": "الْحَمْدُ لِلَّهِ رَبِّ الْعَالَمِينَ",
+    "translation": "All praise is due to Allah, Lord of the worlds."
+  },
+  {
+    "surahNumber": 2,
+    "surahName": "Al-Baqarah",
+    "ayahNumber": 153,
+    "arabicText": "يَا أَيُّهَا الَّذِينَ آمَنُوا اسْتَعِينُوا بِالصَّبْرِ وَالصَّلَاةِ إِنَّ اللَّهَ مَعَ الصَّابِرِينَ",
+    "translation": "O you who have believed, seek help through patience and prayer. Indeed, Allah is with the patient."
+  },
+  {
+    "surahNumber": 39,
+    "surahName": "Az-Zumar",
+    "ayahNumber": 10,
+    "arabicText": "إِنَّمَا يُوَفَّى الصَّابِرُونَ أَجْرَهُمْ بِغَيْرِ حِسَابٍ",
+    "translation": "Indeed, the patient will be given their reward without account."
+  },
+  {
+    "surahNumber": 94,
+    "surahName": "Ash-Sharh",
+    "ayahNumber": 5,
+    "arabicText": "فَإِنَّ مَعَ الْعُسْرِ يُسْرًا",
+    "translation": "For indeed, with hardship comes ease."
+  }
+]
