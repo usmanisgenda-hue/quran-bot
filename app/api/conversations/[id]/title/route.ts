@@ -46,15 +46,11 @@ export async function POST(request: Request, context: RouteContext) {
       typeof body?.question === "string" ? body.question : "";
 
     const conversation = await prisma.conversation.findUnique({
-      where: { id },
-      include: {
-        messages: {
-          orderBy: {
-            createdAt: "asc",
-          },
-        },
-      },
-    });
+  where: { id },
+  include: {
+    messages: true,
+  },
+});
 
     if (!conversation) {
       return Response.json(
@@ -64,8 +60,8 @@ export async function POST(request: Request, context: RouteContext) {
     }
 
     const firstUserMessage = conversation.messages.find(
-      (message) => message.role === "user"
-    );
+  (message: { role: string; content: string }) => message.role === "user"
+);
 
     const firstQuestion =
       (firstUserMessage && extractUserText(firstUserMessage.content)) ||

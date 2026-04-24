@@ -86,7 +86,12 @@ function extractImageUrlsFromMarkdown(markdown: string): string[] {
 
   return Array.from(urls);
 }
-
+function formatAyahReferences(text: string) {
+  return text.replace(
+    /"([^"]+)"\s*\n?\s*\(Quran\s+(\d+):(\d+)\)/g,
+    '\n\n> "$1"\n>\n> **Quran $2:$3**'
+  );
+}
 export default function Home() {
   const [question, setQuestion] = useState("");
   const [loading, setLoading] = useState(false);
@@ -1419,7 +1424,7 @@ export default function Home() {
                                 ),
                               }}
                             >
-                              {loading && isLast ? displayedAnswer : chat.answer}
+                              {formatAyahReferences(loading && isLast ? displayedAnswer : chat.answer)}
                             </ReactMarkdown>
                             {loading && isLast && <span className="qa-cursor">▌</span>}
                           </div>

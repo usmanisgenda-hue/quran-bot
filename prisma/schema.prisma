@@ -3,7 +3,8 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
 model Conversation {
@@ -19,14 +20,14 @@ model Message {
   role           String
   content        String
   createdAt      DateTime     @default(now())
-  conversation   Conversation @relation(fields: [conversationId], references: [id])
   conversationId Int
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 }
 model QuranVerse {
-  id Int @id @default(autoincrement())
-  surahNumber Int
-  surahName String
-  ayahNumber Int
-  arabicText String
-  translation String
+  id        Int     @id @default(autoincrement())
+  surah     Int
+  ayah      Int
+  arabic    String
+  english   String
+  reference String?
 }
