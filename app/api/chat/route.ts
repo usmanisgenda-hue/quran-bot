@@ -3,6 +3,36 @@ import { prisma } from "@/lib/prisma";
 import fs from "fs/promises";
 import path from "path";
 
+function getAbsoluteUploadPath(previewUrl: string) {
+  return path.join(process.cwd(), "public", previewUrl);
+}
+
+async function extractTextFromFile(previewUrl: string) {
+  const absolutePath = getAbsoluteUploadPath(previewUrl);
+  const ext = path.extname(absolutePath).toLowerCase();
+
+  const fileBuffer = await fs.readFile(absolutePath);
+
+  if (ext === ".pdf") {
+    const req = eval("require");
+    const pdfParse = req("pdf-parse");
+    const result = await pdfParse(fileBuffer);
+    return (result?.text || "").trim();
+  }
+
+  if ([".pptx", ".docx", ".xlsx"].includes(ext)) {
+    const req = eval("require");
+    const officeParser = req("officeparser");
+    const text = await officeParser.parseOfficeAsync(absolutePath);
+    return String(text || "").trim();
+  }
+
+  if ([".txt", ".md", ".csv"].includes(ext)) {
+    return fileBuffer.toString("utf8").trim();
+  }
+
+  return "";
+}
 export const runtime = "nodejs";
 
 const client = new OpenAI({
@@ -83,13 +113,7 @@ function getMimeType(filePath: string) {
   }
 }
 
-function getAbsoluteUploadPath(previewUrl: string) {
-  const normalized = previewUrl.startsWith("/")
-    ? previewUrl.slice(1)
-    : previewUrl;
 
-  return path.join(process.cwd(), "public", normalized);
-}
 
 async function filePathToDataUrl(filePath: string) {
   const fileBuffer = await fs.readFile(filePath);
