@@ -67,6 +67,22 @@ async function ocrPdfBuffer(fileBuffer: Buffer) {
   return combinedText.trim();
 }
 
+
+async function pdfPreviewToPageDataUrls(previewUrl: string, maxPages = 4) {
+  const absolutePath = getAbsoluteUploadPath(previewUrl);
+  const fileBuffer = await fs.readFile(absolutePath);
+  const pageImages = await renderPdfPagesToImageBuffers(fileBuffer, maxPages);
+
+  return pageImages.map((buffer) => {
+    const base64 = buffer.toString("base64");
+    return `data:image/png;base64,${base64}`;
+  });
+}
+
+function getFileExtensionFromPreviewUrl(previewUrl: string) {
+  return path.extname(getAbsoluteUploadPath(previewUrl)).toLowerCase();
+}
+
 async function extractTextFromFile(previewUrl: string) {
   const absolutePath = getAbsoluteUploadPath(previewUrl);
   const ext = path.extname(absolutePath).toLowerCase();
@@ -220,22 +236,51 @@ async function buildUserContent(
   );
 
   let fileContext = "";
+  const visualFileParts: ChatContentPart[] = [];
 
   for (const attachment of fileAttachments) {
     if (!attachment.previewUrl) continue;
+
+    const fileName = attachment.name || "attached file";
+    const ext = getFileExtensionFromPreviewUrl(attachment.previewUrl);
 
     try {
       const fileText = await extractTextFromFile(attachment.previewUrl);
 
       if (fileText) {
-        const limitedFileText = fileText.slice(0, 20000);
-        const wasTrimmed = fileText.length > 20000;
+        const limitedFileText = fileText.slice(0, 24000);
+        const wasTrimmed = fileText.length > 24000;
 
-        fileContext += `\n\n--- FILE: ${attachment.name || "attached file"} ---\n${limitedFileText}${
+        fileContext += `\n\n--- FILE: ${fileName} ---\n${limitedFileText}${
           wasTrimmed ? "\n\n[File text truncated]" : ""
         }`;
       } else {
-        fileContext += `\n\n--- FILE: ${attachment.name || "attached file"} ---\n[No readable text could be extracted from this file.]`;
+        fileContext += `\n\n--- FILE: ${fileName} ---\n[No selectable/OCR text was extracted. If this is a scanned PDF, visual page images are attached below for analysis.]`;
+      }
+
+      if (ext === ".pdf") {
+        try {
+          const pageDataUrls = await pdfPreviewToPageDataUrls(
+            attachment.previewUrl,
+            4
+          );
+
+          if (pageDataUrls.length > 0) {
+            visualFileParts.push({
+              type: "text",
+              text: `\n\nThe uploaded PDF "${fileName}" is also provided below as page images. Read the visible text/content from these pages if the extracted text above is incomplete.`,
+            });
+
+            for (const dataUrl of pageDataUrls) {
+              visualFileParts.push({
+                type: "image_url",
+                image_url: { url: dataUrl },
+              });
+            }
+          }
+        } catch (pdfImageError) {
+          console.error("Failed to render PDF pages for vision:", pdfImageError);
+        }
       }
     } catch (error) {
       console.error(
@@ -244,7 +289,7 @@ async function buildUserContent(
         error
       );
 
-      fileContext += `\n\n--- FILE: ${attachment.name || "attached file"} ---\n[File extraction failed.]`;
+      fileContext += `\n\n--- FILE: ${fileName} ---\n[File extraction failed. Error was logged on the server.]`;
     }
   }
 
@@ -255,10 +300,6 @@ async function buildUserContent(
     .filter(Boolean)
     .join("\n\n")
     .trim();
-
-  if (imageAttachments.length === 0) {
-    return finalText;
-  }
 
   const parts: ChatContentPart[] = [{ type: "text", text: finalText }];
 
@@ -279,6 +320,12 @@ async function buildUserContent(
         error
       );
     }
+  }
+
+  parts.push(...visualFileParts);
+
+  if (parts.length === 1) {
+    return finalText;
   }
 
   return parts;
