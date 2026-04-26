@@ -379,12 +379,15 @@ export async function POST(request: Request) {
         throw new Error("Image generation returned no image data.");
       }
 
-      const publicUrl = await saveBase64ImageToPublic(imageBase64);
+      // Railway/Next deployments often do NOT reliably serve files written
+      // into /public at runtime. Return a data URL directly so the browser
+      // can render the generated image immediately.
+      const imageDataUrl = `data:image/png;base64,${imageBase64}`;
 
       const assistantPayload = {
         type: "image",
         text: "Here is your generated image.",
-        imageUrl: publicUrl,
+        imageUrl: imageDataUrl,
       };
 
       const assistantMarkdown = `${assistantPayload.text}\n\n![Generated image](${assistantPayload.imageUrl})`;
