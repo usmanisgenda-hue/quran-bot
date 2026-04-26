@@ -170,23 +170,13 @@ function QuranReferencesBlock({ citations }: { citations: QuranCitation[] }) {
   if (citations.length === 0) return null;
 
   return (
-    <div className="not-prose mt-5 rounded-2xl border border-[#d4af37]/50 bg-[#d4af37]/10 p-5 shadow-[0_0_22px_rgba(212,175,55,0.15)]">
-      <div className="mb-4 flex items-center gap-3">
-        <div className="h-px flex-1 bg-[#d4af37]/40" />
-        <p className="text-xs font-black uppercase tracking-[0.35em] text-[#d4af37]">
-          Quran References
-        </p>
-        <div className="h-px flex-1 bg-[#d4af37]/40" />
-      </div>
-
-      <div className="space-y-3">
-        {citations.map((citation, citationIndex) => (
-          <QuranCitationBar
-            key={`${citation.surah}:${citation.ayah}:${citationIndex}`}
-            citation={citation}
-          />
-        ))}
-      </div>
+    <div className="not-prose mt-4 space-y-3">
+      {citations.map((citation, citationIndex) => (
+        <QuranCitationBar
+          key={`${citation.surah}:${citation.ayah}:${citationIndex}`}
+          citation={citation}
+        />
+      ))}
     </div>
   );
 }
