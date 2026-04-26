@@ -12,11 +12,14 @@ import {
   Copy,
   Pencil,
   RefreshCw,
+  Download,
+  Maximize2,
 } from "lucide-react";
 
 type ChatMessage = {
   question: string;
   answer: string;
+  imageUrl?: string;
   attachments?: AttachmentChip[];
 };
 
@@ -34,6 +37,32 @@ type DatabaseMessage = {
   createdAt: string;
   conversationId: number;
 };
+
+
+type AssistantPayload = {
+  type?: string;
+  text?: string;
+  imageUrl?: string;
+};
+
+function parseAssistantPayload(content: string): AssistantPayload | null {
+  try {
+    const parsed = JSON.parse(content);
+    if (parsed && typeof parsed === "object") return parsed;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function extractImageUrlFromMarkdown(text: string) {
+  const match = text.match(/!\[[^\]]*\]\(([^)]+)\)/);
+  return match?.[1] || "";
+}
+
+function removeMarkdownImages(text: string) {
+  return text.replace(/!\[[^\]]*\]\([^)]+\)/g, "").trim();
+}
 
 type AttachmentChip = {
   id: string;
@@ -157,6 +186,70 @@ function QuranReferencesBlock({ citations }: { citations: QuranCitation[] }) {
             citation={citation}
           />
         ))}
+      </div>
+    </div>
+  );
+}
+
+function GeneratedImageCard({
+  imageUrl,
+  onCopy,
+  copied,
+}: {
+  imageUrl: string;
+  onCopy: () => void;
+  copied: boolean;
+}) {
+  return (
+    <div className="not-prose mt-5 overflow-hidden rounded-[1.75rem] border border-[#d4af37]/35 bg-[#041f1d]/80 shadow-[0_18px_60px_rgba(0,0,0,0.35),0_0_35px_rgba(212,175,55,0.12)] backdrop-blur">
+      <div className="flex items-center justify-between border-b border-[#d4af37]/15 bg-gradient-to-r from-[#0b3a36]/95 via-[#0f4a43]/80 to-[#0b3a36]/95 px-4 py-3">
+        <div>
+          <p className="text-[11px] font-black uppercase tracking-[0.28em] text-[#d4af37]">
+            Generated Image
+          </p>
+          <p className="mt-0.5 text-xs text-[#f7df8a]/75">
+            Quran Assist visual result
+          </p>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={onCopy}
+            className="flex h-9 w-9 items-center justify-center rounded-full border border-[#d4af37]/25 bg-[#062927]/80 text-[#f5d76e] transition hover:-translate-y-0.5 hover:border-[#f5d76e]/60 hover:bg-[#123f3b] hover:shadow-[0_0_18px_rgba(212,175,55,0.2)]"
+            title="Copy image link"
+          >
+            {copied ? <span className="text-xs font-bold">✓</span> : <Copy size={15} />}
+          </button>
+
+          <a
+            href={imageUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="flex h-9 w-9 items-center justify-center rounded-full border border-[#d4af37]/25 bg-[#062927]/80 text-[#f5d76e] transition hover:-translate-y-0.5 hover:border-[#f5d76e]/60 hover:bg-[#123f3b] hover:shadow-[0_0_18px_rgba(212,175,55,0.2)]"
+            title="Open full image"
+          >
+            <Maximize2 size={15} />
+          </a>
+
+          <a
+            href={imageUrl}
+            download
+            className="flex h-9 w-9 items-center justify-center rounded-full border border-[#d4af37]/25 bg-[#062927]/80 text-[#f5d76e] transition hover:-translate-y-0.5 hover:border-[#f5d76e]/60 hover:bg-[#123f3b] hover:shadow-[0_0_18px_rgba(212,175,55,0.2)]"
+            title="Download image"
+          >
+            <Download size={15} />
+          </a>
+        </div>
+      </div>
+
+      <div className="relative bg-[radial-gradient(circle_at_top,rgba(212,175,55,0.18),transparent_35%),linear-gradient(135deg,rgba(4,31,29,0.92),rgba(2,18,17,0.95))] p-3">
+        <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(120deg,transparent,rgba(255,224,130,0.08),transparent)]" />
+        <img
+          src={imageUrl}
+          alt="Generated image"
+          className="relative max-h-[560px] w-full rounded-2xl object-contain shadow-[0_14px_45px_rgba(0,0,0,0.35)]"
+        />
       </div>
     </div>
   );
@@ -421,9 +514,16 @@ export default function Home() {
             };
           }
         } else if (msg.role === "assistant" && pendingQuestion !== null) {
+          const assistantPayload = parseAssistantPayload(msg.content);
+          const markdownImageUrl = extractImageUrlFromMarkdown(msg.content);
+
           convertedHistory.push({
             question: pendingQuestion.text,
-            answer: msg.content,
+            answer:
+              assistantPayload?.text ||
+              removeMarkdownImages(msg.content) ||
+              msg.content,
+            imageUrl: assistantPayload?.imageUrl || markdownImageUrl || undefined,
             attachments: pendingQuestion.attachments,
           });
           pendingQuestion = null;
@@ -604,24 +704,39 @@ export default function Home() {
       }
     }
 
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
+    const contentType = response.headers.get("Content-Type") || "";
     let finalAnswer = "";
+    let finalImageUrl = "";
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      const chunk = decoder.decode(value, { stream: true });
-      finalAnswer += chunk;
+    if (contentType.includes("application/json")) {
+      const data = await response.json();
+      finalAnswer = data.answer || data.text || "";
+      finalImageUrl = data.imageUrl || "";
       setStreamBuffer(finalAnswer);
-    }
+      setDisplayedAnswer(finalAnswer);
+    } else {
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
 
-    setDisplayedAnswer(finalAnswer);
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value, { stream: true });
+        finalAnswer += chunk;
+        setStreamBuffer(finalAnswer);
+      }
+
+      finalImageUrl = extractImageUrlFromMarkdown(finalAnswer);
+      finalAnswer = removeMarkdownImages(finalAnswer) || finalAnswer;
+      setDisplayedAnswer(finalAnswer);
+    }
 
     setChatHistory((prev) =>
       prev.map((chat, index) =>
-        index === prev.length - 1 ? { ...chat, answer: finalAnswer } : chat
+        index === prev.length - 1
+          ? { ...chat, answer: finalAnswer, imageUrl: finalImageUrl || undefined }
+          : chat
       )
     );
 
@@ -664,7 +779,7 @@ export default function Home() {
 
     setChatHistory((prev) =>
       prev.map((chat, index) =>
-        index === prev.length - 1 ? { ...chat, answer: "" } : chat
+        index === prev.length - 1 ? { ...chat, answer: "", imageUrl: undefined } : chat
       )
     );
 
@@ -744,7 +859,7 @@ export default function Home() {
 
     setChatHistory((prev) =>
       prev.map((chat, i) =>
-        i === index ? { ...chat, question: updatedQuestion, answer: "" } : chat
+        i === index ? { ...chat, question: updatedQuestion, answer: "", imageUrl: undefined } : chat
       )
     );
 
@@ -1366,7 +1481,24 @@ export default function Home() {
                             <ReactMarkdown>
                               {formattedAnswer.mainText}
                             </ReactMarkdown>
+
+                            {chat.imageUrl && (
+                              <GeneratedImageCard
+                                imageUrl={chat.imageUrl}
+                                copied={copiedKey === `image-${index}`}
+                                onCopy={() => handleCopy(chat.imageUrl || "", `image-${index}`)}
+                              />
+                            )}
+
                             <QuranReferencesBlock citations={formattedAnswer.citations} />
+
+                            {loading && isLast && !chat.answer && (
+                              <div className="not-prose mt-3 space-y-2">
+                                <div className="h-3 w-3/4 animate-pulse rounded-full bg-[#d4af37]/25" />
+                                <div className="h-3 w-1/2 animate-pulse rounded-full bg-[#d4af37]/15" />
+                              </div>
+                            )}
+
                             {loading && isLast && <span className="qa-cursor">▌</span>}
                           </div>
                         </div>
