@@ -11,6 +11,62 @@ function getAbsoluteUploadPath(previewUrl: string) {
   return path.join(process.cwd(), "public", normalized);
 }
 
+async function ocrImageBuffer(imageBuffer: Buffer) {
+  const Tesseract = await import("tesseract.js");
+  const result = await Tesseract.recognize(imageBuffer, "eng");
+  return String(result?.data?.text || "").trim();
+}
+
+async function renderPdfPagesToImageBuffers(fileBuffer: Buffer, maxPages = 4) {
+  const pdfjsLib: any = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  const { createCanvas } = await import("canvas");
+
+  const loadingTask = pdfjsLib.getDocument({
+    data: new Uint8Array(fileBuffer),
+    disableWorker: true,
+    useSystemFonts: true,
+  });
+
+  const pdf = await loadingTask.promise;
+  const pageCount = Math.min(pdf.numPages || 0, maxPages);
+  const images: Buffer[] = [];
+
+  for (let pageNumber = 1; pageNumber <= pageCount; pageNumber++) {
+    const page = await pdf.getPage(pageNumber);
+    const viewport = page.getViewport({ scale: 1.6 });
+
+    const canvas = createCanvas(Math.ceil(viewport.width), Math.ceil(viewport.height));
+    const context = canvas.getContext("2d");
+
+    await page.render({
+      canvasContext: context as any,
+      viewport,
+    }).promise;
+
+    images.push(canvas.toBuffer("image/png"));
+  }
+
+  return images;
+}
+
+async function ocrPdfBuffer(fileBuffer: Buffer) {
+  const pageImages = await renderPdfPagesToImageBuffers(fileBuffer, 4);
+  let combinedText = "";
+
+  for (let i = 0; i < pageImages.length; i++) {
+    try {
+      const pageText = await ocrImageBuffer(pageImages[i]);
+      if (pageText) {
+        combinedText += `\n\n--- OCR PAGE ${i + 1} ---\n${pageText}`;
+      }
+    } catch (error) {
+      console.error(`OCR failed on PDF page ${i + 1}:`, error);
+    }
+  }
+
+  return combinedText.trim();
+}
+
 async function extractTextFromFile(previewUrl: string) {
   const absolutePath = getAbsoluteUploadPath(previewUrl);
   const ext = path.extname(absolutePath).toLowerCase();
@@ -18,10 +74,28 @@ async function extractTextFromFile(previewUrl: string) {
   const fileBuffer = await fs.readFile(absolutePath);
 
   if (ext === ".pdf") {
-    const req = eval("require");
-    const pdfParse = req("pdf-parse");
-    const result = await pdfParse(fileBuffer);
-    return (result?.text || "").trim();
+    try {
+      const req = eval("require");
+      const pdfParse = req("pdf-parse");
+      const result = await pdfParse(fileBuffer);
+      const pdfText = (result?.text || "").trim();
+
+      console.log("PDF TEXT LENGTH:", pdfText.length);
+
+      if (pdfText.length > 30) {
+        return pdfText;
+      }
+    } catch (error) {
+      console.error("pdf-parse failed, falling back to OCR:", error);
+    }
+
+    console.log("PDF has little/no selectable text. Running OCR fallback...");
+    return await ocrPdfBuffer(fileBuffer);
+  }
+
+  if ([".png", ".jpg", ".jpeg", ".webp"].includes(ext)) {
+    console.log("Running OCR on image file...");
+    return await ocrImageBuffer(fileBuffer);
   }
 
   if ([".pptx", ".docx", ".xlsx"].includes(ext)) {
