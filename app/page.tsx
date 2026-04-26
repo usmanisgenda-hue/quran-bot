@@ -98,21 +98,41 @@ function extractQuranCitations(answer: string): {
     if (!alreadyExists) citations.push(citation);
   };
 
+  // Format: Quran 2:153 — O you who have believed...
+  // This must run BEFORE the bare-reference matcher below.
   mainText = mainText.replace(
-    /(?:from\s+)?Surah\s+([A-Za-z'’\-\s]+)\s*[\[(](\d+)\s*:\s*(\d+)[\])]\s*:?\s*[“"]?([^“"\n]+)?[”"]?/gi,
-    (_match, surahName, surah, ayah, quote) => {
+    /^\s*Quran\s+(\d+)\s*:\s*(\d+)\s*(?:—|-|–|:)\s*(.+?)\s*$/gim,
+    (_match, surah, ayah, quote) => {
+      const cleanedQuote = String(quote || "")
+        .replace(/^[“\"]|[”\"]$/g, "")
+        .trim();
+
       addCitation({
-        surahName: String(surahName || "").trim(),
         surah: String(surah),
         ayah: String(ayah),
-        quote: typeof quote === "string" ? quote.trim() : undefined,
+        quote: cleanedQuote,
+        english: cleanedQuote,
       });
       return "";
     }
   );
 
   mainText = mainText.replace(
-    /[“"]([^“"]+)[”"]\s*\(?\s*Quran\s+(\d+)\s*:\s*(\d+)\s*\)?/gi,
+    /(?:from\s+)?Surah\s+([A-Za-z'’\-\s]+)\s*[\[(](\d+)\s*:\s*(\d+)[\])]\s*:?\s*[“\"]?([^“\"\n]+)?[”\"]?/gi,
+    (_match, surahName, surah, ayah, quote) => {
+      addCitation({
+        surahName: String(surahName || "").trim(),
+        surah: String(surah),
+        ayah: String(ayah),
+        quote: typeof quote === "string" ? quote.trim() : undefined,
+        english: typeof quote === "string" ? quote.trim() : undefined,
+      });
+      return "";
+    }
+  );
+
+  mainText = mainText.replace(
+    /[“\"]([^“\"]+)[”\"]\s*\(?\s*Quran\s+(\d+)\s*:\s*(\d+)\s*\)?/gi,
     (_match, quote, surah, ayah) => {
       addCitation({
         surah: String(surah),
@@ -124,6 +144,8 @@ function extractQuranCitations(answer: string): {
     }
   );
 
+  // Fallback: bare reference only. This keeps your gold bar even when the
+  // model fails to provide ayah text.
   mainText = mainText.replace(
     /\(?\s*Quran\s+(\d+)\s*:\s*(\d+)\s*\)?/gi,
     (_match, surah, ayah) => {
@@ -170,7 +192,7 @@ function QuranReferencesBlock({ citations }: { citations: QuranCitation[] }) {
   if (citations.length === 0) return null;
 
   return (
-    <div className="not-prose mt-4 space-y-3">
+    <div className="not-prose mt-5 space-y-3">
       {citations.map((citation, citationIndex) => (
         <QuranCitationBar
           key={`${citation.surah}:${citation.ayah}:${citationIndex}`}
