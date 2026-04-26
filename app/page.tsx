@@ -1,6 +1,5 @@
 "use client";
-
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import {
   Mic,
@@ -13,8 +12,6 @@ import {
   Copy,
   Pencil,
   RefreshCw,
-  Download,
-  Expand,
 } from "lucide-react";
 
 type ChatMessage = {
@@ -49,49 +46,122 @@ const ATTACHMENTS_STORAGE_KEY = "qa-pending-attachments";
 const ACTIVE_CONVERSATION_STORAGE_KEY = "qa-active-conversation-id";
 const CHAT_HISTORY_STORAGE_KEY = "qa-chat-history";
 
-function parseAssistantContentForDisplay(content: string): string {
-  try {
-    const parsed = JSON.parse(content);
+type QuranCitation = {
+  surahName?: string;
+  surah: string;
+  ayah: string;
+  quote?: string;
+  arabic?: string;
+  english?: string;
+};
 
-    if (
-      parsed &&
-      typeof parsed === "object" &&
-      parsed.type === "image" &&
-      typeof parsed.imageUrl === "string"
-    ) {
-      const text =
-        typeof parsed.text === "string" && parsed.text.trim()
-          ? parsed.text.trim()
-          : "Here is your generated image.";
+function extractQuranCitations(answer: string): {
+  mainText: string;
+  citations: QuranCitation[];
+} {
+  const citations: QuranCitation[] = [];
+  let mainText = answer || "";
 
-      return `${text}\n\n![Generated image](${parsed.imageUrl})`;
+  const addCitation = (citation: QuranCitation) => {
+    const alreadyExists = citations.some(
+      (item) => item.surah === citation.surah && item.ayah === citation.ayah
+    );
+    if (!alreadyExists) citations.push(citation);
+  };
+
+  mainText = mainText.replace(
+    /(?:from\s+)?Surah\s+([A-Za-z'’\-\s]+)\s*[\[(](\d+)\s*:\s*(\d+)[\])]\s*:?\s*[“"]?([^“"\n]+)?[”"]?/gi,
+    (_match, surahName, surah, ayah, quote) => {
+      addCitation({
+        surahName: String(surahName || "").trim(),
+        surah: String(surah),
+        ayah: String(ayah),
+        quote: typeof quote === "string" ? quote.trim() : undefined,
+      });
+      return "";
     }
+  );
 
-    return content;
-  } catch {
-    return content;
-  }
+  mainText = mainText.replace(
+    /[“"]([^“"]+)[”"]\s*\(?\s*Quran\s+(\d+)\s*:\s*(\d+)\s*\)?/gi,
+    (_match, quote, surah, ayah) => {
+      addCitation({
+        surah: String(surah),
+        ayah: String(ayah),
+        quote: String(quote).trim(),
+        english: String(quote).trim(),
+      });
+      return "";
+    }
+  );
+
+  mainText = mainText.replace(
+    /\(?\s*Quran\s+(\d+)\s*:\s*(\d+)\s*\)?/gi,
+    (_match, surah, ayah) => {
+      addCitation({ surah: String(surah), ayah: String(ayah) });
+      return "";
+    }
+  );
+
+  mainText = mainText
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/\s+([,.!?;:])/g, "$1")
+    .trim();
+
+  return { mainText, citations };
 }
 
-function extractImageUrlsFromMarkdown(markdown: string): string[] {
-  const urls = new Set<string>();
-  const imageRegex = /!\[[^\]]*?\]\((.*?)\)/g;
+function QuranCitationBar({ citation }: { citation: QuranCitation }) {
+  const title = citation.surahName
+    ? `Surah ${citation.surahName} (${citation.surah}:${citation.ayah})`
+    : `Quran ${citation.surah}:${citation.ayah}`;
 
-  let match: RegExpExecArray | null;
-  while ((match = imageRegex.exec(markdown)) !== null) {
-    if (typeof match[1] === "string" && match[1]) {
-      urls.add(match[1]);
-    }
-  }
+  return (
+    <div className="border-l-2 border-[#d4af37]/70 py-3 pl-4">
+      {citation.arabic && (
+        <p className="mb-3 text-right text-2xl leading-loose text-[#ffe27a]">
+          {citation.arabic}
+        </p>
+      )}
 
-  return Array.from(urls);
-}
-function formatAyahReferences(text: string) {
-  return text.replace(
-    /"([^"]+)"\s*\n?\s*\(Quran\s+(\d+):(\d+)\)/g,
-    '\n\n> "$1"\n>\n> **Quran $2:$3**'
+      {(citation.english || citation.quote) && (
+        <p className="mb-2 text-sm italic leading-relaxed text-[#f8dc7a]">
+          “{citation.english || citation.quote}”
+        </p>
+      )}
+
+      <p className="text-xs font-black uppercase tracking-[0.28em] text-[#d4af37]">
+        {title}
+      </p>
+    </div>
   );
 }
+
+function QuranReferencesBlock({ citations }: { citations: QuranCitation[] }) {
+  if (citations.length === 0) return null;
+
+  return (
+    <div className="not-prose mt-5 rounded-2xl border border-[#d4af37]/50 bg-[#d4af37]/10 p-5 shadow-[0_0_22px_rgba(212,175,55,0.15)]">
+      <div className="mb-4 flex items-center gap-3">
+        <div className="h-px flex-1 bg-[#d4af37]/40" />
+        <p className="text-xs font-black uppercase tracking-[0.35em] text-[#d4af37]">
+          Quran References
+        </p>
+        <div className="h-px flex-1 bg-[#d4af37]/40" />
+      </div>
+
+      <div className="space-y-3">
+        {citations.map((citation, citationIndex) => (
+          <QuranCitationBar
+            key={`${citation.surah}:${citation.ayah}:${citationIndex}`}
+            citation={citation}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function Home() {
   const [question, setQuestion] = useState("");
   const [loading, setLoading] = useState(false);
@@ -116,9 +186,6 @@ export default function Home() {
   const [addMenuOpen, setAddMenuOpen] = useState(false);
   const [attachments, setAttachments] = useState<AttachmentChip[]>([]);
 
-  const [showChatInterface, setShowChatInterface] = useState(false);
-  const [selectedImageUrl, setSelectedImageUrl] = useState<string | null>(null);
-
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const recognitionRef = useRef<any>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -126,12 +193,9 @@ export default function Home() {
   const imageInputRef = useRef<HTMLInputElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  const isHeroVisible = !showChatInterface && chatHistory.length === 0;
-  const isChatVisible = showChatInterface || chatHistory.length > 0;
-
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [chatHistory, loading, displayedAnswer]);
+  }, [chatHistory]);
 
   useEffect(() => {
     fetchConversations();
@@ -160,9 +224,6 @@ export default function Home() {
         const parsedHistory = JSON.parse(savedChatHistory);
         if (Array.isArray(parsedHistory)) {
           setChatHistory(parsedHistory);
-          if (parsedHistory.length > 0) {
-            setShowChatInterface(true);
-          }
         }
       }
     } catch (error) {
@@ -172,7 +233,10 @@ export default function Home() {
 
   useEffect(() => {
     try {
-      localStorage.setItem(ATTACHMENTS_STORAGE_KEY, JSON.stringify(attachments));
+      localStorage.setItem(
+        ATTACHMENTS_STORAGE_KEY,
+        JSON.stringify(attachments)
+      );
     } catch (error) {
       console.error("Failed to persist attachments:", error);
     }
@@ -183,10 +247,16 @@ export default function Home() {
       if (conversationId === null) {
         localStorage.removeItem(ACTIVE_CONVERSATION_STORAGE_KEY);
       } else {
-        localStorage.setItem(ACTIVE_CONVERSATION_STORAGE_KEY, String(conversationId));
+        localStorage.setItem(
+          ACTIVE_CONVERSATION_STORAGE_KEY,
+          String(conversationId)
+        );
       }
 
-      localStorage.setItem(CHAT_HISTORY_STORAGE_KEY, JSON.stringify(chatHistory));
+      localStorage.setItem(
+        CHAT_HISTORY_STORAGE_KEY,
+        JSON.stringify(chatHistory)
+      );
     } catch (error) {
       console.error("Failed to persist chat session:", error);
     }
@@ -220,33 +290,11 @@ export default function Home() {
     };
   }, []);
 
-  useEffect(() => {
-    const handleEsc = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setSelectedImageUrl(null);
-        setAddMenuOpen(false);
-      }
-    };
-
-    window.addEventListener("keydown", handleEsc);
-    return () => window.removeEventListener("keydown", handleEsc);
-  }, []);
-
-  useEffect(() => {
-    if (selectedImageUrl) {
-      document.body.style.overflow = "hidden";
-    } else {
-      document.body.style.overflow = "";
-    }
-
-    return () => {
-      document.body.style.overflow = "";
-    };
-  }, [selectedImageUrl]);
-
   const playMicTone = (type: "start" | "stop") => {
     try {
-      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      const AudioCtx =
+        window.AudioContext || (window as any).webkitAudioContext;
+
       if (!AudioCtx) return;
 
       if (!audioContextRef.current) {
@@ -375,7 +423,7 @@ export default function Home() {
         } else if (msg.role === "assistant" && pendingQuestion !== null) {
           convertedHistory.push({
             question: pendingQuestion.text,
-            answer: parseAssistantContentForDisplay(msg.content),
+            answer: msg.content,
             attachments: pendingQuestion.attachments,
           });
           pendingQuestion = null;
@@ -384,7 +432,6 @@ export default function Home() {
 
       setConversationId(id);
       setChatHistory(convertedHistory);
-      setShowChatInterface(true);
       setStreamBuffer("");
       setDisplayedAnswer("");
       setEditingPromptIndex(null);
@@ -405,8 +452,6 @@ export default function Home() {
     setEditingPromptText("");
     setAddMenuOpen(false);
     setAttachments([]);
-    setSelectedImageUrl(null);
-    setShowChatInterface(false);
     localStorage.removeItem(ATTACHMENTS_STORAGE_KEY);
     localStorage.removeItem(ACTIVE_CONVERSATION_STORAGE_KEY);
     localStorage.removeItem(CHAT_HISTORY_STORAGE_KEY);
@@ -423,7 +468,12 @@ export default function Home() {
       }
 
       if (conversationId === id) {
-        startNewChat();
+        setConversationId(null);
+        setChatHistory([]);
+        setStreamBuffer("");
+        setDisplayedAnswer("");
+        localStorage.removeItem(ACTIVE_CONVERSATION_STORAGE_KEY);
+        localStorage.removeItem(CHAT_HISTORY_STORAGE_KEY);
       }
 
       await fetchConversations();
@@ -492,118 +542,113 @@ export default function Home() {
   };
 
   const handleAsk = async () => {
-    const q = question.trim();
-    const outgoingAttachments = [...attachments];
-    const isFirstPrompt = chatHistory.length === 0 && !showChatInterface;
+  const q = question.trim();
+  const outgoingAttachments = [...attachments];
 
-    if ((!q && outgoingAttachments.length === 0) || loading) return;
+  if ((!q && outgoingAttachments.length === 0) || loading) return;
 
-    const effectiveQuestion =
-      q || (outgoingAttachments.length > 0
-        ? "Please analyze the attached image."
-        : "");
+  const effectiveQuestion =
+    q || (outgoingAttachments.length > 0
+      ? "Please analyze the attached image."
+      : "");
 
-    if (isFirstPrompt) {
-      setShowChatInterface(true);
+  setLoading(true);
+  setQuestion("");
+  setStreamBuffer("");
+  setDisplayedAnswer("");
+  setEditingPromptIndex(null);
+  setEditingPromptText("");
+  setAddMenuOpen(false);
+
+  setChatHistory((prev) => [
+    ...prev,
+    {
+      question: effectiveQuestion,
+      answer: "",
+      attachments: outgoingAttachments,
+    },
+  ]);
+
+  setAttachments([]);
+  localStorage.removeItem(ATTACHMENTS_STORAGE_KEY);
+
+  try {
+    const response = await fetch("/api/chat", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        question: effectiveQuestion,
+        conversationId,
+        attachments: outgoingAttachments,
+      }),
+    });
+
+    if (!response.ok || !response.body) {
+      const errorText = await response.text();
+      console.error("API /api/chat failed:", response.status, errorText);
+      throw new Error(`Request failed: ${response.status} ${errorText}`);
     }
 
-    setLoading(true);
-    setQuestion("");
+    const streamedConversationId = response.headers.get("X-Conversation-Id");
+    let createdNewConversation = false;
+
+    if (streamedConversationId) {
+      const parsedId = Number(streamedConversationId);
+      if (!Number.isNaN(parsedId)) {
+        if (conversationId === null) {
+          createdNewConversation = true;
+        }
+        setConversationId(parsedId);
+      }
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let finalAnswer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      const chunk = decoder.decode(value, { stream: true });
+      finalAnswer += chunk;
+      setStreamBuffer(finalAnswer);
+    }
+
+    setDisplayedAnswer(finalAnswer);
+
+    setChatHistory((prev) =>
+      prev.map((chat, index) =>
+        index === prev.length - 1 ? { ...chat, answer: finalAnswer } : chat
+      )
+    );
+
+    await fetchConversations();
+
+    if (createdNewConversation && streamedConversationId) {
+      fetch(`/api/conversations/${streamedConversationId}/title`, {
+        method: "POST",
+      })
+        .then(() => fetchConversations())
+        .catch((error) => console.error("Title generation failed:", error));
+    }
+  } catch (error) {
+    console.error(error);
+    setChatHistory((prev) =>
+      prev.map((chat, index) =>
+        index === prev.length - 1
+          ? { ...chat, answer: "Something went wrong." }
+          : chat
+      )
+    );
+  } finally {
+    setLoading(false);
     setStreamBuffer("");
     setDisplayedAnswer("");
-    setEditingPromptIndex(null);
-    setEditingPromptText("");
-    setAddMenuOpen(false);
-
-    setChatHistory((prev) => [
-      ...prev,
-      {
-        question: effectiveQuestion,
-        answer: "",
-        attachments: outgoingAttachments,
-      },
-    ]);
-
-    setAttachments([]);
-    localStorage.removeItem(ATTACHMENTS_STORAGE_KEY);
-
-    try {
-      const response = await fetch("/api/chat", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          question: effectiveQuestion,
-          conversationId,
-          attachments: outgoingAttachments,
-        }),
-      });
-
-      if (!response.ok || !response.body) {
-        const errorText = await response.text();
-        console.error("API /api/chat failed:", response.status, errorText);
-        throw new Error(`Request failed: ${response.status} ${errorText}`);
-      }
-
-      const streamedConversationId = response.headers.get("X-Conversation-Id");
-      let createdNewConversation = false;
-
-      if (streamedConversationId) {
-        const parsedId = Number(streamedConversationId);
-        if (!Number.isNaN(parsedId)) {
-          if (conversationId === null) {
-            createdNewConversation = true;
-          }
-          setConversationId(parsedId);
-        }
-      }
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let finalAnswer = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        const chunk = decoder.decode(value, { stream: true });
-        finalAnswer += chunk;
-        setStreamBuffer(finalAnswer);
-      }
-
-      setDisplayedAnswer(finalAnswer);
-
-      setChatHistory((prev) =>
-        prev.map((chat, index) =>
-          index === prev.length - 1 ? { ...chat, answer: finalAnswer } : chat
-        )
-      );
-
-      await fetchConversations();
-
-      if (createdNewConversation && streamedConversationId) {
-        fetch(`/api/conversations/${streamedConversationId}/title`, {
-          method: "POST",
-        })
-          .then(() => fetchConversations())
-          .catch((error) => console.error("Title generation failed:", error));
-      }
-    } catch (error) {
-      console.error(error);
-      setChatHistory((prev) =>
-        prev.map((chat, index) =>
-          index === prev.length - 1
-            ? { ...chat, answer: "Something went wrong." }
-            : chat
-        )
-      );
-    } finally {
-      setLoading(false);
-      setStreamBuffer("");
-      setDisplayedAnswer("");
-    }
-  };
+  }
+};
 
   const handleRegenerate = async () => {
     if (loading || !conversationId || chatHistory.length === 0) return;
@@ -718,10 +763,10 @@ export default function Home() {
       });
 
       if (!response.ok || !response.body) {
-        const errorText = await response.text();
-        console.error("API /api/chat failed:", response.status, errorText);
-        throw new Error(`Request failed: ${response.status} ${errorText}`);
-      }
+  const errorText = await response.text();
+  console.error("API /api/chat failed:", response.status, errorText);
+  throw new Error(`Request failed: ${response.status} ${errorText}`);
+}
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
@@ -870,15 +915,6 @@ export default function Home() {
     setAddMenuOpen(false);
   };
 
-  const handleDownloadImage = (imageUrl: string) => {
-    const anchor = document.createElement("a");
-    anchor.href = imageUrl;
-    anchor.download = imageUrl.split("/").pop() || "generated-image.png";
-    document.body.appendChild(anchor);
-    anchor.click();
-    document.body.removeChild(anchor);
-  };
-
   const renderAttachmentChips = () => {
     if (attachments.length === 0) return null;
 
@@ -930,8 +966,7 @@ export default function Home() {
               <img
                 src={item.previewUrl}
                 alt={item.name}
-                className="h-28 w-28 cursor-pointer object-cover transition hover:opacity-90"
-                onClick={() => item.previewUrl && setSelectedImageUrl(item.previewUrl)}
+                className="h-28 w-28 object-cover"
               />
             ) : (
               <div className="flex items-center gap-2 px-3 py-2 text-sm text-white/85">
@@ -1008,126 +1043,6 @@ export default function Home() {
     );
   };
 
-  const renderAssistantActions = (chat: ChatMessage, index: number, isLast: boolean) => {
-    const imageUrls = extractImageUrlsFromMarkdown(chat.answer);
-    const primaryImageUrl = imageUrls[0];
-
-    return (
-      <div className="mt-2 flex flex-wrap gap-2 px-2">
-        <button
-          onClick={() => handleCopy(chat.answer, `answer-${index}`)}
-          className="flex h-8 w-8 items-center justify-center rounded-full border border-[#d4af37]/20 bg-[#0a3a37]/60 text-[#f2d46b] transition hover:bg-[#114743] hover:text-[#ffe082] button-press"
-          title="Copy"
-          type="button"
-        >
-          {copiedKey === `answer-${index}` ? (
-            <span className="text-xs">✓</span>
-          ) : (
-            <Copy size={14} />
-          )}
-        </button>
-
-        {primaryImageUrl && (
-          <>
-            <button
-              onClick={() => handleDownloadImage(primaryImageUrl)}
-              className="flex h-8 w-8 items-center justify-center rounded-full border border-[#d4af37]/20 bg-[#0a3a37]/60 text-[#f2d46b] transition hover:bg-[#114743] hover:text-[#ffe082] button-press"
-              title="Download image"
-              type="button"
-            >
-              <Download size={14} />
-            </button>
-
-            <button
-              onClick={() => setSelectedImageUrl(primaryImageUrl)}
-              className="flex h-8 w-8 items-center justify-center rounded-full border border-[#d4af37]/20 bg-[#0a3a37]/60 text-[#f2d46b] transition hover:bg-[#114743] hover:text-[#ffe082] button-press"
-              title="View full screen"
-              type="button"
-            >
-              <Expand size={14} />
-            </button>
-          </>
-        )}
-
-        {isLast && (
-          <button
-            onClick={handleRegenerate}
-            className="flex h-8 w-8 items-center justify-center rounded-full border border-[#d4af37]/20 bg-[#0a3a37]/60 text-[#f2d46b] transition hover:bg-[#114743] hover:text-[#ffe082] button-press"
-            title="Regenerate"
-            type="button"
-          >
-            <RefreshCw size={14} />
-          </button>
-        )}
-      </div>
-    );
-  };
-
-  const heroSection = useMemo(
-    () => (
-      <div
-        className={`qa-panel-transition absolute inset-0 flex flex-col items-center justify-between overflow-hidden px-6 py-8 ${
-          isHeroVisible ? "qa-panel-visible" : "qa-panel-hidden"
-        }`}
-      >
-        <div
-          className="fade-in-kaaba absolute inset-0 bg-cover bg-center bg-no-repeat will-change-transform"
-          style={{ backgroundImage: "url('/kaaba.png')" }}
-        />
-        <div className="absolute inset-0 bg-[#052f2d]/35" />
-
-        <div className="fade-in-gold relative z-10 mt-2 text-center font-serif text-6xl tracking-wide text-[#d4af37] drop-shadow-[0_0_20px_rgba(212,175,55,0.35)] md:text-7xl">
-          Quran Assist
-        </div>
-
-        <div className="flex-1" />
-
-        <div className="relative z-10 mb-4 w-full max-w-6xl">
-          {renderAttachmentChips()}
-
-          <div className="flex items-center rounded-full border border-[#d4af37]/70 bg-[#0a3a37]/75 px-6 py-4 shadow-[0_0_40px_rgba(212,175,55,0.2)] backdrop-blur-xl transition-all duration-500">
-            {renderAddMenuButton("hero")}
-
-            <input
-              type="text"
-              placeholder="Ask Quran Assist anything..."
-              value={question}
-              disabled={loading}
-              onChange={(e) => setQuestion(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") handleAsk();
-              }}
-              className="ml-4 flex-1 bg-transparent text-2xl text-white outline-none placeholder:text-white/70 disabled:opacity-50"
-            />
-
-            <button
-              onClick={handleMicClick}
-              type="button"
-              className={`ml-4 flex h-16 w-16 items-center justify-center rounded-2xl border text-3xl shadow-lg transition-all duration-200 button-press ${
-                isListening
-                  ? "border-red-400/40 bg-red-500/20 text-red-300 mic-glow shadow-lg"
-                  : "border-[#d4af37]/30 bg-[#123f3b] text-[#d4af37] hover:scale-105 hover:shadow-[0_0_25px_rgba(212,175,55,0.25)] gold-glow"
-              }`}
-              title={isListening ? "Stop recording" : "Start voice input"}
-            >
-              {isListening ? <Square size={28} /> : <Mic size={28} />}
-            </button>
-
-            <button
-              onClick={handleAsk}
-              type="button"
-              disabled={loading || (!question.trim() && attachments.length === 0)}
-              className="ml-4 flex h-16 w-16 items-center justify-center rounded-2xl border border-[#d4af37]/30 bg-[#123f3b] text-4xl text-[#d4af37] shadow-lg transition hover:scale-105 hover:shadow-[0_0_25px_rgba(212,175,55,0.25)] disabled:opacity-50 button-press gold-glow"
-            >
-              ↑
-            </button>
-          </div>
-        </div>
-      </div>
-    ),
-    [isHeroVisible, attachments, question, loading, isListening, addMenuOpen]
-  );
-
   return (
     <div className="flex h-screen bg-[radial-gradient(circle_at_top,#0b4a45_0%,#052f2d_55%,#031f1d_100%)] text-[#d4af37]">
       <input
@@ -1159,7 +1074,7 @@ export default function Home() {
             Conversations
           </div>
 
-          <div className="qa-scroll flex-1 space-y-2 overflow-y-auto">
+          <div className="flex-1 space-y-2 overflow-y-auto">
             {conversations.map((conversation) => (
               <div
                 key={conversation.id}
@@ -1257,18 +1172,69 @@ export default function Home() {
           </div>
         </div>
 
-        <div className="relative flex-1 overflow-hidden">
-          {heroSection}
+        {chatHistory.length === 0 ? (
+          <div className="relative flex flex-1 flex-col items-center justify-between overflow-hidden px-6 py-8">
+            <div
+              className="fade-in-kaaba absolute inset-0 bg-cover bg-center bg-no-repeat will-change-transform"
+              style={{ backgroundImage: "url('/kaaba.png')" }}
+            />
+            <div className="absolute inset-0 bg-[#052f2d]/35" />
 
-          <div
-            className={`qa-panel-transition absolute inset-0 flex flex-col ${
-              isChatVisible ? "qa-panel-visible" : "qa-panel-hidden"
-            }`}
-          >
-            <div className="qa-scroll flex flex-1 justify-center overflow-y-auto px-4 py-6">
-              <div className="w-full max-w-3xl space-y-5 px-2 pb-28">
+            <div className="fade-in-gold relative z-10 mt-2 text-center font-serif text-6xl tracking-wide text-[#d4af37] drop-shadow-[0_0_20px_rgba(212,175,55,0.35)] md:text-7xl">
+              Quran Assist
+            </div>
+
+            <div className="flex-1" />
+
+            <div className="relative z-10 mb-4 w-full max-w-6xl">
+              {renderAttachmentChips()}
+
+              <div className="flex items-center rounded-full border border-[#d4af37]/70 bg-[#0a3a37]/75 px-6 py-4 shadow-[0_0_40px_rgba(212,175,55,0.2)] backdrop-blur-xl">
+                {renderAddMenuButton("hero")}
+                 
+                <input
+                  type="text"
+                  placeholder="Ask Quran Assist anything..."
+                  value={question}
+                  disabled={loading}
+                  onChange={(e) => setQuestion(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") handleAsk();
+                  }}
+                  className="ml-4 flex-1 bg-transparent text-2xl text-white outline-none placeholder:text-white/70 disabled:opacity-50"
+                />
+
+                <button
+                  onClick={handleMicClick}
+                  type="button"
+                  className={`ml-4 flex h-16 w-16 items-center justify-center rounded-2xl border text-3xl shadow-lg transition-all duration-200 button-press ${
+                    isListening
+                      ? "border-red-400/40 bg-red-500/20 text-red-300 mic-glow shadow-lg"
+                      : "border-[#d4af37]/30 bg-[#123f3b] text-[#d4af37] hover:scale-105 hover:shadow-[0_0_25px_rgba(212,175,55,0.25)] gold-glow"
+                  }`}
+                  title={isListening ? "Stop recording" : "Start voice input"}
+                >
+                  {isListening ? <Square size={28} /> : <Mic size={28} />}
+                </button>
+
+                <button
+                  onClick={handleAsk}
+                  disabled={loading || (!question.trim() && attachments.length === 0)}
+                  className="ml-4 flex h-16 w-16 items-center justify-center rounded-2xl border border-[#d4af37]/30 bg-[#123f3b] text-4xl text-[#d4af37] shadow-lg transition hover:scale-105 hover:shadow-[0_0_25px_rgba(212,175,55,0.25)] disabled:opacity-50 button-press gold-glow"
+                >
+                  ↑
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <>
+            <div className="flex flex-1 justify-center overflow-y-auto px-4 py-6">
+              <div className="w-full max-w-3xl space-y-5 px-2">
                 {chatHistory.map((chat, index) => {
                   const isLast = index === chatHistory.length - 1;
+                  const activeAnswer = loading && isLast ? displayedAnswer : chat.answer;
+                  const formattedAnswer = extractQuranCitations(activeAnswer);
 
                   return (
                     <div key={index} className="flex flex-col gap-2">
@@ -1317,7 +1283,6 @@ export default function Home() {
                                 onClick={() => handleCopy(chat.question, `prompt-${index}`)}
                                 className="flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-[#062927]/70 text-white/80 transition hover:bg-[#0b3a36] hover:text-white button-press"
                                 title="Copy"
-                                type="button"
                               >
                                 {copiedKey === `prompt-${index}` ? (
                                   <span className="text-xs">✓</span>
@@ -1331,7 +1296,6 @@ export default function Home() {
                                   onClick={() => beginEditPrompt(index, chat.question)}
                                   className="flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-[#062927]/70 text-white/80 transition hover:bg-[#0b3a36] hover:text-white button-press"
                                   title="Edit"
-                                  type="button"
                                 >
                                   <Pencil size={14} />
                                 </button>
@@ -1397,40 +1361,41 @@ export default function Home() {
 
                               [&_hr]:my-3
                               [&_hr]:border-[#d4af37]/20
-
-                              [&_img]:my-3
-                              [&_img]:max-h-[420px]
-                              [&_img]:max-w-full
-                              [&_img]:cursor-zoom-in
-                              [&_img]:rounded-2xl
-                              [&_img]:border
-                              [&_img]:border-[#d4af37]/30
-                              [&_img]:object-cover
                             "
                           >
-                            <ReactMarkdown
-                              components={{
-                                img: ({ src, alt }) => (
-                                  <img
-                                    src={typeof src === "string" ? src : ""}
-                                    alt={alt || "Generated image"}
-                                    className="qa-image-hover my-3 max-h-[420px] max-w-full cursor-zoom-in rounded-2xl border border-[#d4af37]/30 object-cover"
-                                    onClick={() => {
-                                      if (typeof src === "string") {
-                                        setSelectedImageUrl(src);
-                                      }
-                                    }}
-                                  />
-                                ),
-                              }}
-                            >
-                              {formatAyahReferences(loading && isLast ? displayedAnswer : chat.answer)}
+                            <ReactMarkdown>
+                              {formattedAnswer.mainText}
                             </ReactMarkdown>
+                            <QuranReferencesBlock citations={formattedAnswer.citations} />
                             {loading && isLast && <span className="qa-cursor">▌</span>}
                           </div>
                         </div>
 
-                        {!loading && renderAssistantActions(chat, index, isLast)}
+                        {!loading && (
+                          <div className="mt-2 flex gap-2 px-2">
+                            <button
+                              onClick={() => handleCopy(chat.answer, `answer-${index}`)}
+                              className="flex h-8 w-8 items-center justify-center rounded-full border border-[#d4af37]/20 bg-[#0a3a37]/60 text-[#f2d46b] transition hover:bg-[#114743] hover:text-[#ffe082] button-press"
+                              title="Copy"
+                            >
+                              {copiedKey === `answer-${index}` ? (
+                                <span className="text-xs">✓</span>
+                              ) : (
+                                <Copy size={14} />
+                              )}
+                            </button>
+
+                            {isLast && (
+                              <button
+                                onClick={handleRegenerate}
+                                className="flex h-8 w-8 items-center justify-center rounded-full border border-[#d4af37]/20 bg-[#0a3a37]/60 text-[#f2d46b] transition hover:bg-[#114743] hover:text-[#ffe082] button-press"
+                                title="Regenerate"
+                              >
+                                <RefreshCw size={14} />
+                              </button>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </div>
                   );
@@ -1440,11 +1405,11 @@ export default function Home() {
               </div>
             </div>
 
-            <div className="border-t border-[#d4af37]/20 p-4 backdrop-blur-sm">
+            <div className="border-t border-[#d4af37]/20 p-4">
               <div className="mx-auto max-w-5xl">
                 {renderAttachmentChips()}
 
-                <div className="flex items-center rounded-full border border-[#d4af37]/70 bg-[#0a3a37]/80 px-6 py-4 shadow-[0_0_40px_rgba(212,175,55,0.15)] backdrop-blur-xl transition-all duration-500">
+                <div className="flex items-center rounded-full border border-[#d4af37]/70 bg-[#0a3a37]/80 px-6 py-4 shadow-[0_0_40px_rgba(212,175,55,0.15)] backdrop-blur-xl">
                   {renderAddMenuButton("chat")}
 
                   <input
@@ -1474,7 +1439,6 @@ export default function Home() {
 
                   <button
                     onClick={handleAsk}
-                    type="button"
                     disabled={loading || (!question.trim() && attachments.length === 0)}
                     className="ml-3 flex h-12 w-12 items-center justify-center rounded-xl border border-[#d4af37]/30 bg-[#123f3b] text-2xl text-[#d4af37] shadow-lg transition hover:scale-105 hover:shadow-[0_0_25px_rgba(212,175,55,0.25)] disabled:opacity-50 button-press gold-glow"
                   >
@@ -1483,47 +1447,9 @@ export default function Home() {
                 </div>
               </div>
             </div>
-          </div>
-        </div>
+          </>
+        )}
       </main>
-
-      {selectedImageUrl && (
-        <div
-          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 p-6 qa-modal-backdrop"
-          onClick={() => setSelectedImageUrl(null)}
-        >
-          <div
-            className="relative flex max-h-full w-full max-w-6xl flex-col items-center justify-center qa-enter"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="absolute right-0 top-0 flex -translate-y-14 gap-2">
-              <button
-                onClick={() => handleDownloadImage(selectedImageUrl)}
-                className="flex items-center gap-2 rounded-xl border border-white/15 bg-[#062927]/90 px-4 py-2 text-sm text-white transition hover:bg-[#0b3a36]"
-                type="button"
-              >
-                <Download size={16} />
-                Download
-              </button>
-
-              <button
-                onClick={() => setSelectedImageUrl(null)}
-                className="flex items-center gap-2 rounded-xl border border-white/15 bg-[#062927]/90 px-4 py-2 text-sm text-white transition hover:bg-[#0b3a36]"
-                type="button"
-              >
-                <X size={16} />
-                Close
-              </button>
-            </div>
-
-            <img
-              src={selectedImageUrl}
-              alt="Expanded"
-              className="max-h-[88vh] w-auto max-w-full rounded-2xl border border-[#d4af37]/25 shadow-[0_0_40px_rgba(0,0,0,0.45)]"
-            />
-          </div>
-        </div>
-      )}
     </div>
   );
 }
