@@ -254,7 +254,9 @@ async function assistantMessageToHistory(
     ];
 
     try {
-      const dataUrl = await imagePreviewToDataUrl(parsed.imageUrl);
+      const dataUrl = parsed.imageUrl.startsWith("data:image/")
+        ? parsed.imageUrl
+        : await imagePreviewToDataUrl(parsed.imageUrl);
 
       history.push({
         role: "user",
@@ -420,7 +422,11 @@ export async function POST(request: Request) {
       take: 18,
     });
 
-    const recentMessages = recentMessagesDesc.reverse();
+    let recentMessages = recentMessagesDesc.reverse();
+
+    if (regenerate && recentMessages.at(-1)?.role === "assistant") {
+      recentMessages = recentMessages.slice(0, -1);
+    }
 
     const historyMessages: ChatHistoryMessage[] = [];
 
@@ -462,14 +468,6 @@ export async function POST(request: Request) {
           "Be clear, helpful, and reasonably concise.",
       },
       ...historyMessages,
-      ...(regenerate
-        ? []
-        : [
-            {
-              role: "user",
-              content: await buildUserContent(question, attachments),
-            } satisfies ChatHistoryMessage,
-          ]),
     ];
 
     const stream = await client.chat.completions.create({
