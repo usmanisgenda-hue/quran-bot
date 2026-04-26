@@ -4,7 +4,11 @@ import fs from "fs/promises";
 import path from "path";
 
 function getAbsoluteUploadPath(previewUrl: string) {
-  return path.join(process.cwd(), "public", previewUrl);
+  const normalized = previewUrl.startsWith("/")
+    ? previewUrl.slice(1)
+    : previewUrl;
+
+  return path.join(process.cwd(), "public", normalized);
 }
 
 async function extractTextFromFile(previewUrl: string) {
@@ -127,17 +131,6 @@ async function imagePreviewToDataUrl(previewUrl: string) {
   return filePathToDataUrl(absolutePath);
 }
 
-async function extractTextFromPdf(previewUrl: string) {
-  const absolutePath = getAbsoluteUploadPath(previewUrl);
-  const fileBuffer = await fs.readFile(absolutePath);
-
-  const req = eval("require");
-  const pdfParse = req("pdf-parse");
-  const textResult = await pdfParse(fileBuffer);
-
-  return (textResult?.text || "").trim();
-}
-
 async function buildUserContent(
   text: string,
   attachments: StoredAttachment[] = []
@@ -152,21 +145,23 @@ async function buildUserContent(
       attachment.kind === "file" && typeof attachment.previewUrl === "string"
   );
 
-  let pdfContext = "";
+  let fileContext = "";
 
   for (const attachment of fileAttachments) {
     if (!attachment.previewUrl) continue;
 
     try {
-      const pdfText = await extractTextFromPdf(attachment.previewUrl);
+      const fileText = await extractTextFromFile(attachment.previewUrl);
 
-      if (pdfText) {
-        const limitedPdfText = pdfText.slice(0, 12000);
-        const wasTrimmed = pdfText.length > 12000;
+      if (fileText) {
+        const limitedFileText = fileText.slice(0, 20000);
+        const wasTrimmed = fileText.length > 20000;
 
-        pdfContext += `\n\n--- PDF: ${attachment.name || "attached file"} ---\n${limitedPdfText}${
-          wasTrimmed ? "\n\n[PDF text truncated]" : ""
+        fileContext += `\n\n--- FILE: ${attachment.name || "attached file"} ---\n${limitedFileText}${
+          wasTrimmed ? "\n\n[File text truncated]" : ""
         }`;
+      } else {
+        fileContext += `\n\n--- FILE: ${attachment.name || "attached file"} ---\n[No readable text could be extracted from this file.]`;
       }
     } catch (error) {
       console.error(
@@ -174,11 +169,13 @@ async function buildUserContent(
         attachment.previewUrl,
         error
       );
+
+      fileContext += `\n\n--- FILE: ${attachment.name || "attached file"} ---\n[File extraction failed.]`;
     }
   }
 
   const finalText = [
-    pdfContext.trim() ? `PDF CONTENT:\n${pdfContext.trim()}` : "",
+    fileContext.trim() ? `UPLOADED FILE CONTENT:\n${fileContext.trim()}` : "",
     `USER QUESTION:\n${text || "Please analyze the attachment."}`,
   ]
     .filter(Boolean)
@@ -416,7 +413,6 @@ export async function POST(request: Request) {
         imageUrl: imageDataUrl,
       };
 
-      const assistantMarkdown = `${assistantPayload.text}\n\n![Generated image](${assistantPayload.imageUrl})`;
 
       await prisma.message.create({
         data: {
@@ -488,7 +484,7 @@ export async function POST(request: Request) {
           "If a prior generated image is included as a reference in the conversation history, use it directly to answer follow-up questions about that image. " +
           "If the user says 'this image', 'that image', or similar, first check whether a referenced image from earlier in the same conversation is present. " +
           "If the user provides image attachments, analyze the visible contents directly. " +
-          "If the user provides a PDF, use the extracted PDF text to answer. " +
+          "If the user provides an uploaded file, use the extracted file text to answer. " +
           "Do not claim you cannot view an image when an image is present in the conversation context. " +
           "For time-sensitive questions, use the runtime date context below instead of guessing from stale model knowledge. " +
           `Current runtime ISO date/time: ${dateContext.isoDate}. ` +
