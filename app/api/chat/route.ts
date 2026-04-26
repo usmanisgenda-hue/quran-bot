@@ -397,12 +397,18 @@ export async function POST(request: Request) {
         },
       });
 
-      return new Response(assistantMarkdown, {
-        headers: {
-          "Content-Type": "text/plain; charset=utf-8",
-          "X-Conversation-Id": String(conversation.id),
+      return Response.json(
+        {
+          answer: assistantPayload.text,
+          imageUrl: assistantPayload.imageUrl,
+          conversationId: conversation.id,
         },
-      });
+        {
+          headers: {
+            "X-Conversation-Id": String(conversation.id),
+          },
+        }
+      );
     }
 
     const recentMessagesDesc = await prisma.message.findMany({
