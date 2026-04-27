@@ -227,11 +227,14 @@ function GeneratedImageCard({
   onCopy,
   onOpen,
   copied,
+  onImageClick,
 }: {
   imageUrl: string;
   onCopy: () => void;
   onOpen: () => void;
   copied: boolean;
+  onImageClick: (url: string) => void;
+  
 }) {
   return (
     <div className="not-prose mt-5 overflow-hidden rounded-[1.75rem] border border-[#d4af37]/35 bg-[#041f1d]/80 shadow-[0_18px_60px_rgba(0,0,0,0.35),0_0_35px_rgba(212,175,55,0.12)] backdrop-blur">
@@ -277,11 +280,11 @@ function GeneratedImageCard({
       <div className="relative bg-[radial-gradient(circle_at_top,rgba(212,175,55,0.18),transparent_35%),linear-gradient(135deg,rgba(4,31,29,0.92),rgba(2,18,17,0.95))] p-3">
         <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(120deg,transparent,rgba(255,224,130,0.08),transparent)]" />
         <img
-          src={imageUrl}
-          alt="Generated image"
-          onClick={onOpen}
-          className="relative cursor-zoom-in max-h-[560px] w-full rounded-2xl object-contain shadow-[0_14px_45px_rgba(0,0,0,0.35)]"
-        />
+  src={imageUrl}
+  alt="Generated image"
+  onClick={() => onImageClick(imageUrl)}
+  className="relative cursor-zoom-in max-h-[560px] w-full rounded-2xl object-contain shadow-[0_14px_45px_rgba(0,0,0,0.35)]"
+/>
       </div>
     </div>
   );
@@ -1541,11 +1544,12 @@ export default function Home() {
 
                             {chat.imageUrl && (
                               <GeneratedImageCard
-                                imageUrl={chat.imageUrl}
-                                copied={copiedKey === `image-${index}`}
-                                onCopy={() => handleCopy(chat.imageUrl || "", `image-${index}`)}
-                              onOpen={() => setFullscreenImage(chat.imageUrl || null)}
-                              />
+  imageUrl={chat.imageUrl}
+  copied={copiedKey === `image-${index}`}
+  onCopy={() => handleCopy(chat.imageUrl || "", `image-${index}`)}
+  onOpen={() => window.open(chat.imageUrl, "_blank")}
+  onImageClick={setFullscreenImage}
+/>
                             )}
 
                             <QuranReferencesBlock citations={formattedAnswer.citations} />
