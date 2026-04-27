@@ -207,6 +207,21 @@ function QuranReferencesBlock({ citations }: { citations: QuranCitation[] }) {
   );
 }
 
+function ChatGPTTypingIndicator() {
+  return (
+    <div className="not-prose flex items-center gap-2 py-1 text-[#f5d76e]/80">
+      <div className="flex items-center gap-1.5">
+        <span className="h-2 w-2 animate-bounce rounded-full bg-[#d4af37] [animation-delay:-0.3s]" />
+        <span className="h-2 w-2 animate-bounce rounded-full bg-[#d4af37] [animation-delay:-0.15s]" />
+        <span className="h-2 w-2 animate-bounce rounded-full bg-[#d4af37]" />
+      </div>
+      <span className="text-xs font-semibold uppercase tracking-[0.22em] text-[#d4af37]/70">
+        Thinking
+      </span>
+    </div>
+  );
+}
+
 function GeneratedImageCard({
   imageUrl,
   onCopy,
@@ -378,9 +393,9 @@ export default function Home() {
     const interval = setInterval(() => {
       setDisplayedAnswer((prev) => {
         if (prev.length >= streamBuffer.length) return prev;
-        return streamBuffer.slice(0, prev.length + 2);
+        return streamBuffer.slice(0, prev.length + 1);
       });
-    }, 12);
+    }, 7);
 
     return () => clearInterval(interval);
   }, [streamBuffer, displayedAnswer, loading]);
@@ -1373,6 +1388,7 @@ export default function Home() {
                 {chatHistory.map((chat, index) => {
                   const isLast = index === chatHistory.length - 1;
                   const activeAnswer = loading && isLast ? displayedAnswer : chat.answer;
+                  const isGenerating = loading && isLast;
                   const formattedAnswer = extractQuranCitations(activeAnswer);
 
                   return (
@@ -1444,11 +1460,18 @@ export default function Home() {
                         </div>
                       </div>
 
-                      <div className="self-start max-w-[78%]">
-                        <div className="rounded-3xl border border-[#d4af37]/15 bg-[#123f3b]/95 px-5 py-4 text-[#d4af37] shadow-[0_12px_40px_rgba(0,0,0,0.18)] transition hover:shadow-[0_0_30px_rgba(212,175,55,0.12)] chat-bubble">
+                      <div className="group self-start max-w-[78%]">
+                        <div
+                          className={`rounded-3xl border border-[#d4af37]/15 bg-[#123f3b]/95 px-5 text-[#d4af37] shadow-[0_12px_40px_rgba(0,0,0,0.18)] transition-all duration-300 ease-out hover:shadow-[0_0_30px_rgba(212,175,55,0.12)] chat-bubble ${
+                            isGenerating
+                              ? "min-h-[54px] py-3"
+                              : "py-4"
+                          }`}
+                        >
                           <div
                             className="
                               typing-reveal
+                              qa-message-enter
                               prose prose-invert max-w-none
                               leading-[1.55]
 
@@ -1502,9 +1525,17 @@ export default function Home() {
                               [&_hr]:border-[#d4af37]/20
                             "
                           >
-                            <ReactMarkdown>
-                              {formattedAnswer.mainText}
-                            </ReactMarkdown>
+                            {formattedAnswer.mainText ? (
+                              <ReactMarkdown>
+                                {formattedAnswer.mainText}
+                              </ReactMarkdown>
+                            ) : isGenerating ? (
+                              <ChatGPTTypingIndicator />
+                            ) : null}
+
+                            {isGenerating && formattedAnswer.mainText && (
+                              <span className="not-prose qa-cursor ml-0.5 align-baseline">▌</span>
+                            )}
 
                             {chat.imageUrl && (
                               <GeneratedImageCard
@@ -1516,19 +1547,18 @@ export default function Home() {
 
                             <QuranReferencesBlock citations={formattedAnswer.citations} />
 
-                            {loading && isLast && !chat.answer && (
-                              <div className="not-prose mt-3 space-y-2">
-                                <div className="h-3 w-3/4 animate-pulse rounded-full bg-[#d4af37]/25" />
-                                <div className="h-3 w-1/2 animate-pulse rounded-full bg-[#d4af37]/15" />
+                            {isGenerating && formattedAnswer.mainText && (
+                              <div className="not-prose mt-3 flex items-center gap-1.5 text-[#d4af37]/70">
+                                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#d4af37]/70 [animation-delay:-0.3s]" />
+                                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#d4af37]/70 [animation-delay:-0.15s]" />
+                                <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-[#d4af37]/70" />
                               </div>
                             )}
-
-                            {loading && isLast && <span className="qa-cursor">▌</span>}
                           </div>
                         </div>
 
                         {!loading && (
-                          <div className="mt-2 flex gap-2 px-2">
+                          <div className="mt-2 flex gap-2 px-2 opacity-0 transition-opacity duration-200 group-hover:opacity-100">
                             <button
                               onClick={() => handleCopy(chat.answer, `answer-${index}`)}
                               className="flex h-8 w-8 items-center justify-center rounded-full border border-[#d4af37]/20 bg-[#0a3a37]/60 text-[#f2d46b] transition hover:bg-[#114743] hover:text-[#ffe082] button-press"
@@ -1606,6 +1636,39 @@ export default function Home() {
           </>
         )}
       </main>
+
+      <style jsx global>{`
+        .qa-message-enter {
+          animation: qa-message-fade-in 220ms ease-out both;
+        }
+
+        .qa-cursor {
+          display: inline-block;
+          color: #ffe082;
+          animation: qa-cursor-blink 0.95s steps(2, start) infinite;
+          text-shadow: 0 0 12px rgba(255, 224, 130, 0.45);
+        }
+
+        .chat-bubble {
+          transform-origin: top left;
+        }
+
+        @keyframes qa-message-fade-in {
+          from {
+            opacity: 0;
+            transform: translateY(4px);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0);
+          }
+        }
+
+        @keyframes qa-cursor-blink {
+          0%, 45% { opacity: 1; }
+          46%, 100% { opacity: 0; }
+        }
+      `}</style>
     </div>
   );
 }
