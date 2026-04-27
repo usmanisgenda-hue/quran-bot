@@ -817,55 +817,62 @@ export default function Home() {
     );
 
     try {
-      const response = await fetch("/api/chat", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          question: lastQuestion,
-          conversationId,
-          regenerate: true,
-          attachments: lastChat.attachments ?? [],
-        }),
-      });
+  const response = await fetch("/api/chat", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      question: lastQuestion,
+      conversationId,
+      regenerate: true,
+      attachments: lastChat.attachments ?? [],
+    }),
+  });
 
-      if (!response.ok || !response.body) {
-        throw new Error("Regenerate failed");
-      }
+  if (!response.ok) {
+    throw new Error("Regenerate failed");
+  }
 
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let finalAnswer = "";
+  const text = await response.text();
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+  let finalAnswer = text;
+  let finalImageUrl: string | undefined = undefined;
 
-        const chunk = decoder.decode(value, { stream: true });
-        finalAnswer += chunk;
-        setStreamBuffer(finalAnswer);
-      }
+  try {
+    const data = JSON.parse(text);
+    finalAnswer = data.answer || "";
+    finalImageUrl = data.imageUrl || undefined;
+  } catch {
+    // not JSON → normal text response
+    finalAnswer = text;
+  }
 
-      setDisplayedAnswer(finalAnswer);
+  setChatHistory((prev) =>
+    prev.map((chat, index) =>
+      index === prev.length - 1
+        ? {
+            ...chat,
+            answer: finalAnswer,
+            imageUrl: finalImageUrl,
+          }
+        : chat
+    )
+  );
+} catch (error) {
+  console.error(error);
 
-      setChatHistory((prev) =>
-        prev.map((chat, index) =>
-          index === prev.length - 1 ? { ...chat, answer: finalAnswer } : chat
-        )
-      );
-
-      await fetchConversations();
-    } catch (error) {
-      console.error(error);
-      setChatHistory((prev) =>
-        prev.map((chat, index) =>
-          index === prev.length - 1
-            ? { ...chat, answer: "Something went wrong." }
-            : chat
-        )
-      );
-    } finally {
+  setChatHistory((prev) =>
+    prev.map((chat, index) =>
+      index === prev.length - 1
+        ? {
+            ...chat,
+            answer: "Error regenerating response.",
+          }
+        : chat
+    )
+  );
+}  finally {
       setLoading(false);
       setStreamBuffer("");
       setDisplayedAnswer("");
