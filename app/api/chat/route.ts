@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import { prisma } from "@/lib/prisma";
+import fs from "fs/promises";
 import path from "path";
 
 export const runtime = "nodejs";
@@ -29,6 +30,13 @@ type ChatHistoryMessage = {
   content: string | ChatContentPart[];
 };
 
+type ClientHistoryItem = {
+  question?: string;
+  answer?: string;
+  imageUrl?: string;
+  attachments?: StoredAttachment[];
+};
+
 function cleanBase64(input?: string) {
   if (!input) return "";
   return input.includes(",") ? input.split(",").pop() || "" : input;
@@ -44,6 +52,7 @@ function getAttachmentMimeType(attachment: StoredAttachment) {
   if (attachment.type) return attachment.type;
 
   const ext = getAttachmentExtension(attachment);
+
   switch (ext) {
     case ".png":
       return "image/png";
@@ -62,31 +71,26 @@ function getAttachmentMimeType(attachment: StoredAttachment) {
       return "text/csv";
     case ".md":
       return "text/markdown";
-    case ".docx":
-      return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-    case ".pptx":
-      return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
-    case ".xlsx":
-      return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
     default:
       return "application/octet-stream";
   }
+}
+
+function isImageAttachment(attachment: StoredAttachment) {
+  const mimeType = getAttachmentMimeType(attachment);
+  const ext = getAttachmentExtension(attachment);
+
+  return (
+    attachment.kind === "image" ||
+    mimeType.startsWith("image/") ||
+    [".png", ".jpg", ".jpeg", ".webp", ".gif"].includes(ext)
+  );
 }
 
 function attachmentToDataUrl(attachment: StoredAttachment) {
   const base64 = cleanBase64(attachment.base64);
   if (!base64) return "";
   return `data:${getAttachmentMimeType(attachment)};base64,${base64}`;
-}
-
-function isImageAttachment(attachment: StoredAttachment) {
-  const mimeType = getAttachmentMimeType(attachment);
-  const ext = getAttachmentExtension(attachment);
-  return (
-    attachment.kind === "image" ||
-    mimeType.startsWith("image/") ||
-    [".png", ".jpg", ".jpeg", ".webp", ".gif"].includes(ext)
-  );
 }
 
 function parseUserMessageContent(content: string): {
@@ -136,11 +140,11 @@ function shouldGenerateImage(question: string, attachments: StoredAttachment[]) 
     /^create an image\b/,
     /^create image\b/,
     /^make an image\b/,
+    /^make me an image\b/,
     /^draw\b/,
     /^illustrate\b/,
     /^produce an image\b/,
     /^show me an image of\b/,
-    /^make me an image of\b/,
     /^create a picture of\b/,
     /^generate a picture of\b/,
   ];
@@ -158,9 +162,95 @@ function cleanImagePrompt(question: string) {
     .trim();
 }
 
-async function assistantMessageToHistory(
-  content: string
-): Promise<ChatHistoryMessage[]> {
+function makeSafeAttachmentForDb(attachment: StoredAttachment) {
+  return {
+    id: attachment.id,
+    name: attachment.name,
+    kind: attachment.kind,
+    previewUrl: attachment.previewUrl,
+    type: attachment.type,
+    mimeType: attachment.mimeType,
+    size: attachment.size,
+  };
+}
+
+function publicUrlToAbsolutePath(publicUrl: string) {
+  const cleanPath = publicUrl.startsWith("/") ? publicUrl.slice(1) : publicUrl;
+  return path.join(process.cwd(), "public", cleanPath);
+}
+
+async function localPublicImageToDataUrl(imageUrl: string) {
+  if (imageUrl.startsWith("data:image/")) return imageUrl;
+  if (!imageUrl.startsWith("/")) return "";
+
+  try {
+    const filePath = publicUrlToAbsolutePath(imageUrl);
+    const fileBuffer = await fs.readFile(filePath);
+    const ext = path.extname(filePath).toLowerCase();
+    const mimeType =
+      ext === ".jpg" || ext === ".jpeg"
+        ? "image/jpeg"
+        : ext === ".webp"
+          ? "image/webp"
+          : ext === ".gif"
+            ? "image/gif"
+            : "image/png";
+
+    return `data:${mimeType};base64,${fileBuffer.toString("base64")}`;
+  } catch (error) {
+    console.error("Could not rehydrate local generated image:", imageUrl, error);
+    return "";
+  }
+}
+
+async function saveBase64ImageToPublic(base64: string) {
+  const dir = path.join(process.cwd(), "public", "generated-images");
+  await fs.mkdir(dir, { recursive: true });
+
+  const filename = `${Date.now()}-${Math.random().toString(36).slice(2)}.png`;
+  const filePath = path.join(dir, filename);
+  await fs.writeFile(filePath, Buffer.from(cleanBase64(base64), "base64"));
+
+  return `/generated-images/${filename}`;
+}
+
+async function buildUserContent(
+  text: string,
+  attachments: StoredAttachment[] = []
+): Promise<string | ChatContentPart[]> {
+  const textPart: ChatContentPart = {
+    type: "text",
+    text: text?.trim() || "Please analyze the attached content.",
+  };
+
+  const parts: ChatContentPart[] = [textPart];
+
+  for (const attachment of attachments) {
+    if (!isImageAttachment(attachment)) {
+      if (attachment.name) {
+        textPart.text += `\n\nUploaded file: ${attachment.name}.`;
+      }
+      continue;
+    }
+
+    const dataUrl = attachmentToDataUrl(attachment);
+    if (!dataUrl) {
+      if (attachment.name) {
+        textPart.text += `\n\nImage attachment metadata received: ${attachment.name}.`;
+      }
+      continue;
+    }
+
+    parts.push({
+      type: "image_url",
+      image_url: { url: dataUrl },
+    });
+  }
+
+  return parts.length === 1 ? textPart.text : parts;
+}
+
+async function assistantMessageToHistory(content: string): Promise<ChatHistoryMessage[]> {
   const parsed = parseStoredAssistantPayload(content);
 
   if (parsed?.type === "image" && typeof parsed.imageUrl === "string") {
@@ -173,7 +263,9 @@ async function assistantMessageToHistory(
       { role: "assistant", content: assistantText },
     ];
 
-    if (parsed.imageUrl.startsWith("data:image/")) {
+    const dataUrl = await localPublicImageToDataUrl(parsed.imageUrl);
+
+    if (dataUrl) {
       history.push({
         role: "user",
         content: [
@@ -183,8 +275,13 @@ async function assistantMessageToHistory(
               "Reference from earlier in this same conversation: this is the previously generated image. " +
               "Use it when answering follow-up questions about 'this image', 'that image', or similar references.",
           },
-          { type: "image_url", image_url: { url: parsed.imageUrl } },
+          { type: "image_url", image_url: { url: dataUrl } },
         ],
+      });
+    } else {
+      history.push({
+        role: "assistant",
+        content: `${assistantText}\n\nGenerated image reference: ${parsed.imageUrl}`,
       });
     }
 
@@ -194,8 +291,49 @@ async function assistantMessageToHistory(
   return [{ role: "assistant", content }];
 }
 
+async function clientHistoryToMessages(
+  history: ClientHistoryItem[] = []
+): Promise<ChatHistoryMessage[]> {
+  const messages: ChatHistoryMessage[] = [];
+  const recent = history.slice(-10);
+
+  for (const item of recent) {
+    if (item.question?.trim()) {
+      messages.push({
+        role: "user",
+        content: await buildUserContent(item.question, item.attachments ?? []),
+      });
+    }
+
+    if (item.answer?.trim()) {
+      messages.push({ role: "assistant", content: item.answer });
+    }
+
+    if (item.imageUrl) {
+      const dataUrl = await localPublicImageToDataUrl(item.imageUrl);
+      if (dataUrl) {
+        messages.push({
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text:
+                "Reference from earlier in this same conversation: this is the previously generated image. " +
+                "Use it when answering follow-up questions about the image.",
+            },
+            { type: "image_url", image_url: { url: dataUrl } },
+          ],
+        });
+      }
+    }
+  }
+
+  return messages;
+}
+
 function buildRealtimeDateContext() {
   const now = new Date();
+
   return {
     isoDate: now.toISOString(),
     utcYear: now.getUTCFullYear(),
@@ -213,15 +351,14 @@ function buildSystemPrompt() {
 
   return (
     "You are Quran Assist, a respectful and knowledgeable Islamic assistant. " +
-    "Maintain conversational continuity and use the recent chat history carefully. " +
-    "For Islamic questions, ALWAYS include at least one directly relevant Quran reference when a relevant ayah exists. " +
-    "Do not invent ayah wording. If you are not fully sure of exact wording, give only the Quran reference and a brief paraphrase. " +
-    "When citing Quran, use this exact parseable format on its own line after the explanation: Quran 2:153 — Indeed, Allah is with the patient. " +
-    "You may include multiple Quran citation lines, but keep each as: Quran SURAH:AYAH — short English meaning. " +
-    "For questions about patience/sabr, strongly consider Quran 2:153, Quran 2:155-157, Quran 3:200, Quran 39:10, and Quran 103:1-3 when relevant. " +
+    "Maintain conversational continuity and use recent chat history carefully. " +
+    "If a prior generated image is included as a reference in the conversation history, use it directly to answer follow-up questions about that image. " +
+    "If the user says 'this image', 'that image', or similar, first check whether a referenced image from earlier in the same conversation is present. " +
     "If the user provides image attachments, analyze the visible contents directly. " +
-    "If the user provides uploaded files, read the attached file content directly. Do not claim you cannot access the file when file input is present. " +
-    "For time-sensitive questions, use the runtime date context below instead of guessing from stale model knowledge. " +
+    "Do not claim you cannot view an image when an image is present in the conversation context. " +
+    "For Islamic questions, include a relevant Quran reference when a relevant ayah exists. Do not invent exact ayah wording. " +
+    "When citing Quran, use this parseable format on its own line: Quran 2:153 — Indeed, Allah is with the patient. " +
+    "For time-sensitive questions, use the runtime date context below instead of stale knowledge. " +
     `Current runtime ISO date/time: ${dateContext.isoDate}. ` +
     `Current UTC year: ${dateContext.utcYear}. ` +
     `Current local year: ${dateContext.localYear}. ` +
@@ -229,160 +366,6 @@ function buildSystemPrompt() {
     `Current local date string: ${dateContext.prettyLocal}. ` +
     "Be clear, helpful, and reasonably concise."
   );
-}
-
-function makeSafeAttachmentForDb(attachment: StoredAttachment) {
-  // Do not store huge base64 blobs in Prisma/local chat history.
-  // The uploaded file is sent to OpenAI during the same request.
-  return {
-    id: attachment.id,
-    name: attachment.name,
-    kind: attachment.kind,
-    previewUrl: attachment.previewUrl,
-    type: attachment.type,
-    mimeType: attachment.mimeType,
-    size: attachment.size,
-  };
-}
-
-async function buildUserContent(
-  text: string,
-  attachments: StoredAttachment[] = []
-): Promise<string | ChatContentPart[]> {
-  const parts: ChatContentPart[] = [
-    { type: "text", text: text || "Please analyze the attachment." },
-  ];
-
-  for (const attachment of attachments) {
-    if (!isImageAttachment(attachment)) continue;
-
-    const dataUrl = attachmentToDataUrl(attachment);
-    if (!dataUrl) continue;
-
-    parts.push({ type: "image_url", image_url: { url: dataUrl } });
-  }
-
-  if (parts.length === 1 && parts[0].type === "text") {
-    return parts[0].text;
-  }
-
-  return parts;
-}
-
-async function uploadAttachmentToOpenAI(attachment: StoredAttachment) {
-  const base64 = cleanBase64(attachment.base64);
-  if (!base64) return null;
-
-  const buffer = Buffer.from(base64, "base64");
-  const mimeType = getAttachmentMimeType(attachment);
-  const filename = attachment.name || `uploaded${getAttachmentExtension(attachment) || ".file"}`;
-
-  const file = new File([new Uint8Array(buffer)], filename, { type: mimeType });
-
-  const uploaded = await client.files.create({
-    file,
-    purpose: "user_data",
-  } as any);
-
-  return uploaded.id;
-}
-
-async function answerWithFilesUsingResponsesAPI(args: {
-  question: string;
-  attachments: StoredAttachment[];
-  conversationId: number;
-}) {
-  const { question, attachments, conversationId } = args;
-
-  const inputContent: any[] = [
-    {
-      type: "input_text",
-      text: question || "Please summarize the uploaded file.",
-    },
-  ];
-
-  for (const attachment of attachments) {
-    const base64 = cleanBase64(attachment.base64);
-    if (!base64) {
-      console.warn("Skipping attachment without inline base64:", attachment.name);
-      continue;
-    }
-
-    const mimeType = getAttachmentMimeType(attachment);
-
-    if (mimeType.startsWith("image/")) {
-      inputContent.push({
-        type: "input_image",
-        image_url: `data:${mimeType};base64,${base64}`,
-      });
-      continue;
-    }
-
-    const fileId = await uploadAttachmentToOpenAI(attachment);
-    if (!fileId) continue;
-
-    inputContent.push({
-      type: "input_file",
-      file_id: fileId,
-    });
-  }
-
-  if (inputContent.length === 1) {
-    return "I received the file bubble, but the actual file content was not sent. Please re-upload the file in a new chat and try again.";
-  }
-
-  const recentMessagesDesc = await prisma.message.findMany({
-    where: { conversationId },
-    orderBy: { createdAt: "desc" },
-    take: 8,
-  });
-
-  const historyText = recentMessagesDesc
-    .reverse()
-    .map((msg) => {
-      if (msg.role === "user") {
-        const parsed = parseUserMessageContent(msg.content);
-        return `User: ${parsed.text}`;
-      }
-      return `Assistant: ${msg.content}`;
-    })
-    .join("\n");
-
-  if (historyText.trim()) {
-    inputContent.unshift({
-      type: "input_text",
-      text: `Recent conversation context:\n${historyText}`,
-    });
-  }
-
-  const response = await client.responses.create({
-    model: "gpt-4o",
-    instructions: buildSystemPrompt(),
-    input: [
-      {
-        role: "user",
-        content: inputContent,
-      },
-    ],
-  } as any);
-
-  const outputText = (response as any).output_text;
-
-  if (typeof outputText === "string" && outputText.trim()) {
-    return outputText.trim();
-  }
-
-  const output = (response as any).output;
-  const fallback = Array.isArray(output)
-    ? output
-        .flatMap((item: any) => item?.content || [])
-        .map((part: any) => part?.text || part?.content || "")
-        .filter(Boolean)
-        .join("\n")
-        .trim()
-    : "";
-
-  return fallback || "I could not extract a response from the uploaded file.";
 }
 
 export async function POST(request: Request) {
@@ -393,31 +376,16 @@ export async function POST(request: Request) {
       conversationId,
       attachments = [],
       regenerate = false,
+      history = [],
     } = body ?? {};
 
-    if (
-      !question?.trim() &&
-      (!Array.isArray(attachments) || attachments.length === 0)
-    ) {
-      return new Response("Question or attachment is required.", { status: 400 });
-    }
-
-    const normalizedAttachments: StoredAttachment[] = Array.isArray(attachments)
+    const safeAttachments: StoredAttachment[] = Array.isArray(attachments)
       ? attachments
       : [];
 
-    console.log(
-      "CHAT ATTACHMENTS SUMMARY:",
-      normalizedAttachments.map((a) => ({
-        name: a.name,
-        kind: a.kind,
-        type: a.type,
-        mimeType: a.mimeType,
-        hasBase64: Boolean(a.base64),
-        base64Length: a.base64 ? cleanBase64(a.base64).length : 0,
-        previewUrl: a.previewUrl,
-      }))
-    );
+    if (!question?.trim() && safeAttachments.length === 0) {
+      return new Response("Question or attachment is required.", { status: 400 });
+    }
 
     let conversation =
       typeof conversationId === "number"
@@ -430,8 +398,6 @@ export async function POST(request: Request) {
       });
     }
 
-    const safeAttachmentsForDb = normalizedAttachments.map(makeSafeAttachmentForDb);
-
     if (!regenerate) {
       await prisma.message.create({
         data: {
@@ -439,13 +405,13 @@ export async function POST(request: Request) {
           role: "user",
           content: JSON.stringify({
             text: question,
-            attachments: safeAttachmentsForDb,
+            attachments: safeAttachments.map(makeSafeAttachmentForDb),
           }),
         },
       });
     }
 
-    if (shouldGenerateImage(question, normalizedAttachments)) {
+    if (shouldGenerateImage(question, safeAttachments)) {
       const prompt = cleanImagePrompt(question) || question.trim();
 
       const result = await client.images.generate({
@@ -455,13 +421,17 @@ export async function POST(request: Request) {
       });
 
       const imageBase64 = result.data?.[0]?.b64_json;
-      if (!imageBase64) throw new Error("Image generation returned no image data.");
 
-      const imageDataUrl = `data:image/png;base64,${imageBase64}`;
+      if (!imageBase64) {
+        throw new Error("Image generation returned no image data.");
+      }
+
+      const imageUrl = await saveBase64ImageToPublic(imageBase64);
+
       const assistantPayload = {
         type: "image",
         text: "Here is your generated image.",
-        imageUrl: imageDataUrl,
+        imageUrl,
       };
 
       await prisma.message.create({
@@ -472,38 +442,8 @@ export async function POST(request: Request) {
         },
       });
 
-      return Response.json(
-        {
-          answer: assistantPayload.text,
-          imageUrl: assistantPayload.imageUrl,
-          conversationId: conversation.id,
-        },
-        { headers: { "X-Conversation-Id": String(conversation.id) } }
-      );
-    }
-
-    const hasFileAttachment = normalizedAttachments.some(
-      (a) => a.kind === "file" || (!isImageAttachment(a) && Boolean(a.base64))
-    );
-
-    if (hasFileAttachment) {
-      const answer = await answerWithFilesUsingResponsesAPI({
-        question,
-        attachments: normalizedAttachments,
-        conversationId: conversation.id,
-      });
-
-      await prisma.message.create({
-        data: {
-          conversationId: conversation.id,
-          role: "assistant",
-          content: answer,
-        },
-      });
-
-      return new Response(answer, {
+      return Response.json(assistantPayload, {
         headers: {
-          "Content-Type": "text/plain; charset=utf-8",
           "X-Conversation-Id": String(conversation.id),
         },
       });
@@ -515,28 +455,34 @@ export async function POST(request: Request) {
       take: 18,
     });
 
-    let recentMessages = recentMessagesDesc.reverse();
-    if (regenerate && recentMessages.at(-1)?.role === "assistant") {
-      recentMessages = recentMessages.slice(0, -1);
-    }
+    const recentMessages = recentMessagesDesc.reverse();
+    const dbHistoryMessages: ChatHistoryMessage[] = [];
 
-    const historyMessages: ChatHistoryMessage[] = [];
     for (const msg of recentMessages) {
       if (msg.role === "user") {
         const parsed = parseUserMessageContent(msg.content);
-        historyMessages.push({
+        dbHistoryMessages.push({
           role: "user",
           content: await buildUserContent(parsed.text, parsed.attachments),
         });
       } else {
-        const expandedAssistantHistory = await assistantMessageToHistory(msg.content);
-        historyMessages.push(...expandedAssistantHistory);
+        dbHistoryMessages.push(...(await assistantMessageToHistory(msg.content)));
       }
     }
 
+    const frontendHistoryMessages = await clientHistoryToMessages(history);
+
     const messages: ChatHistoryMessage[] = [
       { role: "system", content: buildSystemPrompt() },
-      ...historyMessages,
+      ...(dbHistoryMessages.length > 0 ? dbHistoryMessages : frontendHistoryMessages),
+      ...(regenerate
+        ? []
+        : [
+            {
+              role: "user",
+              content: await buildUserContent(question, safeAttachments),
+            } satisfies ChatHistoryMessage,
+          ]),
     ];
 
     const stream = await client.chat.completions.create({
