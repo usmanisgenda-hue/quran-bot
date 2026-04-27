@@ -69,6 +69,10 @@ type AttachmentChip = {
   name: string;
   kind: "image" | "file";
   previewUrl?: string;
+  type?: string;
+  mimeType?: string;
+  size?: number;
+  base64?: string;
 };
 
 const ATTACHMENTS_STORAGE_KEY = "qa-pending-attachments";
@@ -977,9 +981,13 @@ export default function Home() {
 
         uploadedItems.push({
           id: `${Date.now()}-${file.name}`,
-          name: data.name,
+          name: data.name || file.name,
           kind: file.type.startsWith("image/") ? "image" : "file",
           previewUrl: data.url,
+          type: data.type || file.type,
+          mimeType: data.type || file.type,
+          size: data.size || file.size,
+          base64: data.base64,
         });
       }
 
@@ -1018,9 +1026,13 @@ export default function Home() {
 
         uploadedItems.push({
           id: `${Date.now()}-${file.name}`,
-          name: data.name,
+          name: data.name || file.name,
           kind: file.type.startsWith("image/") ? "image" : "file",
           previewUrl: data.url,
+          type: data.type || file.type,
+          mimeType: data.type || file.type,
+          size: data.size || file.size,
+          base64: data.base64,
         });
       }
 
