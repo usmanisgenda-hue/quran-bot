@@ -279,6 +279,7 @@ function GeneratedImageCard({
         <img
           src={imageUrl}
           alt="Generated image"
+          onClick={() => window.open(imageUrl, "_blank")}
           className="relative max-h-[560px] w-full rounded-2xl object-contain shadow-[0_14px_45px_rgba(0,0,0,0.35)]"
         />
       </div>
