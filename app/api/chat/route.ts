@@ -1,6 +1,5 @@
 import OpenAI from "openai";
 import { prisma } from "@/lib/prisma";
-import fs from "fs/promises";
 import path from "path";
 
 export const runtime = "nodejs";
@@ -29,55 +28,9 @@ type ChatHistoryMessage = {
   content: string | ChatContentPart[];
 };
 
-function parseUserMessageContent(content: string): {
-  text: string;
-  attachments: StoredAttachment[];
-} {
-  try {
-    const parsed = JSON.parse(content);
-
-    return {
-      text: typeof parsed?.text === "string" ? parsed.text : content,
-      attachments: Array.isArray(parsed?.attachments) ? parsed.attachments : [],
-    };
-  } catch {
-    return {
-      text: content,
-      attachments: [],
-    };
-  }
-}
-
-function isLikelyJson(content: string) {
-  const trimmed = content.trim();
-  return trimmed.startsWith("{") && trimmed.endsWith("}");
-}
-
-function parseStoredAssistantPayload(content: string): {
-  type?: string;
-  text?: string;
-  imageUrl?: string;
-} | null {
-  if (!isLikelyJson(content)) return null;
-
-  try {
-    const parsed = JSON.parse(content);
-    if (parsed && typeof parsed === "object") return parsed;
-    return null;
-  } catch {
-    return null;
-  }
-}
-
 function cleanBase64(input?: string) {
   if (!input) return "";
   return input.includes(",") ? input.split(",").pop() || "" : input;
-}
-
-function attachmentToBuffer(attachment: StoredAttachment) {
-  const base64 = cleanBase64(attachment.base64);
-  if (!base64) return null;
-  return Buffer.from(base64, "base64");
 }
 
 function getAttachmentExtension(attachment: StoredAttachment) {
@@ -125,242 +78,49 @@ function attachmentToDataUrl(attachment: StoredAttachment) {
   return `data:${getAttachmentMimeType(attachment)};base64,${base64}`;
 }
 
-async function ocrImageBuffer(imageBuffer: Buffer) {
-  const Tesseract = await import("tesseract.js");
-  const result = await Tesseract.recognize(imageBuffer, "eng");
-  return String(result?.data?.text || "").trim();
-}
-
-async function renderPdfPagesToImageBuffers(fileBuffer: Buffer, maxPages = 4) {
-  const pdfjsLib: any = await import("pdfjs-dist/legacy/build/pdf.mjs");
-  const { createCanvas } = await import("canvas");
-
-  const loadingTask = pdfjsLib.getDocument({
-    data: new Uint8Array(fileBuffer),
-    disableWorker: true,
-    useSystemFonts: true,
-  });
-
-  const pdf = await loadingTask.promise;
-  const pageCount = Math.min(pdf.numPages || 0, maxPages);
-  const images: Buffer[] = [];
-
-  for (let pageNumber = 1; pageNumber <= pageCount; pageNumber++) {
-    const page = await pdf.getPage(pageNumber);
-    const viewport = page.getViewport({ scale: 1.6 });
-
-    const canvas = createCanvas(Math.ceil(viewport.width), Math.ceil(viewport.height));
-    const context = canvas.getContext("2d");
-
-    await page.render({
-      canvasContext: context as any,
-      viewport,
-    }).promise;
-
-    images.push(canvas.toBuffer("image/png"));
-  }
-
-  return images;
-}
-
-async function ocrPdfBuffer(fileBuffer: Buffer) {
-  const pageImages = await renderPdfPagesToImageBuffers(fileBuffer, 4);
-  let combinedText = "";
-
-  for (let i = 0; i < pageImages.length; i++) {
-    try {
-      const pageText = await ocrImageBuffer(pageImages[i]);
-      if (pageText) {
-        combinedText += `\n\n--- OCR PAGE ${i + 1} ---\n${pageText}`;
-      }
-    } catch (error) {
-      console.error(`OCR failed on PDF page ${i + 1}:`, error);
-    }
-  }
-
-  return combinedText.trim();
-}
-
-async function pdfBufferToPageDataUrls(fileBuffer: Buffer, maxPages = 4) {
-  const pageImages = await renderPdfPagesToImageBuffers(fileBuffer, maxPages);
-
-  return pageImages.map((buffer) => {
-    const base64 = buffer.toString("base64");
-    return `data:image/png;base64,${base64}`;
-  });
-}
-
-async function parseOfficeBufferWithTempFile(
-  fileBuffer: Buffer,
-  attachment: StoredAttachment
-) {
-  const req = eval("require");
-  const officeParser = req("officeparser");
-  const safeName = (attachment.name || `uploaded-${Date.now()}`).replace(
-    /[^a-zA-Z0-9._-]/g,
-    "_"
+function isImageAttachment(attachment: StoredAttachment) {
+  const mimeType = getAttachmentMimeType(attachment);
+  const ext = getAttachmentExtension(attachment);
+  return (
+    attachment.kind === "image" ||
+    mimeType.startsWith("image/") ||
+    [".png", ".jpg", ".jpeg", ".webp", ".gif"].includes(ext)
   );
-  const tempPath = path.join("/tmp", `${Date.now()}-${safeName}`);
+}
+
+function parseUserMessageContent(content: string): {
+  text: string;
+  attachments: StoredAttachment[];
+} {
+  try {
+    const parsed = JSON.parse(content);
+    return {
+      text: typeof parsed?.text === "string" ? parsed.text : content,
+      attachments: Array.isArray(parsed?.attachments) ? parsed.attachments : [],
+    };
+  } catch {
+    return { text: content, attachments: [] };
+  }
+}
+
+function isLikelyJson(content: string) {
+  const trimmed = content.trim();
+  return trimmed.startsWith("{") && trimmed.endsWith("}");
+}
+
+function parseStoredAssistantPayload(content: string): {
+  type?: string;
+  text?: string;
+  imageUrl?: string;
+} | null {
+  if (!isLikelyJson(content)) return null;
 
   try {
-    await fs.writeFile(tempPath, fileBuffer);
-    const text = await officeParser.parseOfficeAsync(tempPath);
-    return String(text || "").trim();
-  } finally {
-    await fs.unlink(tempPath).catch(() => {});
+    const parsed = JSON.parse(content);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch {
+    return null;
   }
-}
-
-async function extractTextFromAttachment(attachment: StoredAttachment) {
-  const fileBuffer = attachmentToBuffer(attachment);
-
-  if (!fileBuffer) {
-  console.warn("Skipping old attachment without base64:", attachment.name);
-  return "";
-}
-
-  const ext = getAttachmentExtension(attachment);
-  const mimeType = getAttachmentMimeType(attachment);
-
-  if (ext === ".pdf" || mimeType === "application/pdf") {
-    try {
-      const req = eval("require");
-      const pdfParse = req("pdf-parse");
-      const result = await pdfParse(fileBuffer);
-      const pdfText = (result?.text || "").trim();
-
-      console.log("PDF TEXT LENGTH:", pdfText.length);
-
-      if (pdfText.length > 30) {
-        return pdfText;
-      }
-    } catch (error) {
-      console.error("pdf-parse failed, falling back to OCR:", error);
-    }
-
-    console.log("PDF has little/no selectable text. Running OCR fallback...");
-    return await ocrPdfBuffer(fileBuffer);
-  }
-
-  if (
-    [".png", ".jpg", ".jpeg", ".webp"].includes(ext) ||
-    mimeType.startsWith("image/")
-  ) {
-    console.log("Running OCR on image file...");
-    return await ocrImageBuffer(fileBuffer);
-  }
-
-  if ([".pptx", ".docx", ".xlsx"].includes(ext)) {
-    return await parseOfficeBufferWithTempFile(fileBuffer, attachment);
-  }
-
-  if ([".txt", ".md", ".csv"].includes(ext) || mimeType.startsWith("text/")) {
-    return fileBuffer.toString("utf8").trim();
-  }
-
-  return "";
-}
-
-async function buildUserContent(
-  text: string,
-  attachments: StoredAttachment[] = []
-): Promise<string | ChatContentPart[]> {
-  const imageAttachments = attachments.filter(
-    (attachment) => attachment.kind === "image"
-  );
-
-  const fileAttachments = attachments.filter(
-    (attachment) => attachment.kind === "file"
-  );
-
-  let fileContext = "";
-  const visualFileParts: ChatContentPart[] = [];
-
-  for (const attachment of fileAttachments) {
-    const fileName = attachment.name || "attached file";
-    const ext = getAttachmentExtension(attachment);
-    const mimeType = getAttachmentMimeType(attachment);
-    const fileBuffer = attachmentToBuffer(attachment);
-
-    try {
-      const fileText = await extractTextFromAttachment(attachment);
-
-      if (fileText) {
-        const limitedFileText = fileText.slice(0, 24000);
-        const wasTrimmed = fileText.length > 24000;
-
-        fileContext += `\n\n--- FILE: ${fileName} ---\n${limitedFileText}${
-          wasTrimmed ? "\n\n[File text truncated]" : ""
-        }`;
-      } else if (!attachment.base64) {
-        fileContext += `\n\n--- FILE: ${fileName} ---\n[The file metadata was received, but the file content/base64 was missing. The frontend must send attachment.base64 from /api/upload to /api/chat.]`;
-      } else {
-        fileContext += `\n\n--- FILE: ${fileName} ---\n[No selectable/OCR text was extracted. If this file contains visible text, it may be unclear or unsupported.]`;
-      }
-
-      if (fileBuffer && (ext === ".pdf" || mimeType === "application/pdf")) {
-        try {
-          const pageDataUrls = await pdfBufferToPageDataUrls(fileBuffer, 4);
-
-          if (pageDataUrls.length > 0) {
-            visualFileParts.push({
-              type: "text",
-              text: `\n\nThe uploaded PDF "${fileName}" is also provided below as page images. Read the visible text/content from these pages if the extracted text above is incomplete.`,
-            });
-
-            for (const dataUrl of pageDataUrls) {
-              visualFileParts.push({
-                type: "image_url",
-                image_url: { url: dataUrl },
-              });
-            }
-          }
-        } catch (pdfImageError) {
-          console.error("Failed to render PDF pages for vision:", pdfImageError);
-        }
-      }
-    } catch (error) {
-      console.error("Failed to process file attachment:", fileName, error);
-      fileContext += `\n\n--- FILE: ${fileName} ---\n[File extraction failed. Error was logged on the server.]`;
-    }
-  }
-
-  const finalText = [
-    fileContext.trim() ? `UPLOADED FILE CONTENT:\n${fileContext.trim()}` : "",
-    `USER QUESTION:\n${text || "Please analyze the attachment."}`,
-  ]
-    .filter(Boolean)
-    .join("\n\n")
-    .trim();
-
-  const parts: ChatContentPart[] = [{ type: "text", text: finalText }];
-
-  for (const attachment of imageAttachments) {
-    const dataUrl = attachmentToDataUrl(attachment);
-
-    if (dataUrl) {
-      parts.push({
-        type: "image_url",
-        image_url: { url: dataUrl },
-      });
-    } else {
-  const textPart = parts.find(
-    (p): p is { type: "text"; text: string } => p.type === "text"
-  );
-
-  if (textPart) {
-    textPart.text += `\n\n--- IMAGE: ${attachment.name || "attached image"} ---\n`;
-  }
-}
-  }
-
-  parts.push(...visualFileParts);
-
-  if (parts.length === 1) {
-    return finalText;
-  }
-
-  return parts;
 }
 
 function shouldGenerateImage(question: string, attachments: StoredAttachment[]) {
@@ -409,10 +169,7 @@ async function assistantMessageToHistory(
         : "Here is your generated image.";
 
     const history: ChatHistoryMessage[] = [
-      {
-        role: "assistant",
-        content: assistantText,
-      },
+      { role: "assistant", content: assistantText },
     ];
 
     if (parsed.imageUrl.startsWith("data:image/")) {
@@ -425,50 +182,148 @@ async function assistantMessageToHistory(
               "Reference from earlier in this same conversation: this is the previously generated image. " +
               "Use it when answering follow-up questions about 'this image', 'that image', or similar references.",
           },
-          {
-            type: "image_url",
-            image_url: { url: parsed.imageUrl },
-          },
+          { type: "image_url", image_url: { url: parsed.imageUrl } },
         ],
-      });
-    } else {
-      history.push({
-        role: "assistant",
-        content: `${assistantText}\n\n![Generated image](${parsed.imageUrl})`,
       });
     }
 
     return history;
   }
 
-  return [
-    {
-      role: "assistant",
-      content,
-    },
-  ];
+  return [{ role: "assistant", content }];
 }
 
 function buildRealtimeDateContext() {
   const now = new Date();
-
-  const isoDate = now.toISOString();
-  const utcYear = now.getUTCFullYear();
-  const localYear = now.getFullYear();
-
-  const prettyUtc = now.toUTCString();
-  const prettyLocal = now.toLocaleString("en-CA", {
-    dateStyle: "full",
-    timeStyle: "long",
-  });
-
   return {
-    isoDate,
-    utcYear,
-    localYear,
-    prettyUtc,
-    prettyLocal,
+    isoDate: now.toISOString(),
+    utcYear: now.getUTCFullYear(),
+    localYear: now.getFullYear(),
+    prettyUtc: now.toUTCString(),
+    prettyLocal: now.toLocaleString("en-CA", {
+      dateStyle: "full",
+      timeStyle: "long",
+    }),
   };
+}
+
+function buildSystemPrompt() {
+  const dateContext = buildRealtimeDateContext();
+
+  return (
+    "You are Quran Assist, a respectful and knowledgeable Islamic assistant. " +
+    "Maintain conversational continuity and use the recent chat history carefully. " +
+    "For Islamic questions, ALWAYS include at least one directly relevant Quran reference when a relevant ayah exists. " +
+    "Do not invent ayah wording. If you are not fully sure of exact wording, give only the Quran reference and a brief paraphrase. " +
+    "When citing Quran, use this exact parseable format on its own line after the explanation: Quran 2:153 — Indeed, Allah is with the patient. " +
+    "You may include multiple Quran citation lines, but keep each as: Quran SURAH:AYAH — short English meaning. " +
+    "For questions about patience/sabr, strongly consider Quran 2:153, Quran 2:155-157, Quran 3:200, Quran 39:10, and Quran 103:1-3 when relevant. " +
+    "If the user provides image attachments, analyze the visible contents directly. " +
+    "If the user provides uploaded files, read the attached file content directly. Do not claim you cannot access the file when file input is present. " +
+    "For time-sensitive questions, use the runtime date context below instead of guessing from stale model knowledge. " +
+    `Current runtime ISO date/time: ${dateContext.isoDate}. ` +
+    `Current UTC year: ${dateContext.utcYear}. ` +
+    `Current local year: ${dateContext.localYear}. ` +
+    `Current UTC date string: ${dateContext.prettyUtc}. ` +
+    `Current local date string: ${dateContext.prettyLocal}. ` +
+    "Be clear, helpful, and reasonably concise."
+  );
+}
+
+async function buildUserContent(
+  text: string,
+  attachments: StoredAttachment[] = []
+): Promise<string | ChatContentPart[]> {
+  const parts: ChatContentPart[] = [
+    { type: "text", text: text || "Please analyze the attachment." },
+  ];
+
+  for (const attachment of attachments) {
+    if (!isImageAttachment(attachment)) continue;
+
+    const dataUrl = attachmentToDataUrl(attachment);
+    if (!dataUrl) continue;
+
+    parts.push({ type: "image_url", image_url: { url: dataUrl } });
+  }
+
+  if (parts.length === 1 && parts[0].type === "text") {
+    return parts[0].text;
+  }
+
+  return parts;
+}
+
+async function answerWithFilesUsingResponsesAPI(args: {
+  question: string;
+  attachments: StoredAttachment[];
+  conversationId: number;
+}) {
+  const { question, attachments, conversationId } = args;
+
+  const content: any[] = [
+    {
+      type: "input_text",
+      text: question || "Please summarize the uploaded file.",
+    },
+  ];
+
+  for (const attachment of attachments) {
+    const base64 = cleanBase64(attachment.base64);
+    if (!base64) {
+      console.warn("Skipping attachment without inline base64:", attachment.name);
+      continue;
+    }
+
+    const mimeType = getAttachmentMimeType(attachment);
+    const filename = attachment.name || `uploaded${getAttachmentExtension(attachment) || ".file"}`;
+
+    if (mimeType.startsWith("image/")) {
+      content.push({
+        type: "input_image",
+        image_url: `data:${mimeType};base64,${base64}`,
+      });
+    } else {
+      content.push({
+        type: "input_file",
+        filename,
+        file_data: `data:${mimeType};base64,${base64}`,
+      });
+    }
+  }
+
+  if (content.length === 1) {
+    return "I received the file bubble, but the actual file content was not sent. Please re-upload the file in a new chat and try again.";
+  }
+
+  const response = await client.responses.create({
+    model: "gpt-4o",
+    instructions: buildSystemPrompt(),
+    input: [
+      {
+        role: "user",
+        content,
+      },
+    ],
+  } as any);
+
+  const outputText = (response as any).output_text;
+
+  if (typeof outputText === "string" && outputText.trim()) {
+    return outputText.trim();
+  }
+
+  const output = (response as any).output;
+  const fallback = Array.isArray(output)
+    ? output
+        .flatMap((item: any) => item?.content || [])
+        .map((part: any) => part?.text || part?.content || "")
+        .filter(Boolean)
+        .join("\n")
+        .trim()
+    : "";
+
+  return fallback || "I could not extract a response from the uploaded file.";
 }
 
 export async function POST(request: Request) {
@@ -485,9 +340,7 @@ export async function POST(request: Request) {
       !question?.trim() &&
       (!Array.isArray(attachments) || attachments.length === 0)
     ) {
-      return new Response("Question or attachment is required.", {
-        status: 400,
-      });
+      return new Response("Question or attachment is required.", { status: 400 });
     }
 
     const normalizedAttachments: StoredAttachment[] = Array.isArray(attachments)
@@ -509,16 +362,12 @@ export async function POST(request: Request) {
 
     let conversation =
       typeof conversationId === "number"
-        ? await prisma.conversation.findUnique({
-            where: { id: conversationId },
-          })
+        ? await prisma.conversation.findUnique({ where: { id: conversationId } })
         : null;
 
     if (!conversation) {
       conversation = await prisma.conversation.create({
-        data: {
-          title: "New Chat",
-        },
+        data: { title: "New Chat" },
       });
     }
 
@@ -545,13 +394,9 @@ export async function POST(request: Request) {
       });
 
       const imageBase64 = result.data?.[0]?.b64_json;
-
-      if (!imageBase64) {
-        throw new Error("Image generation returned no image data.");
-      }
+      if (!imageBase64) throw new Error("Image generation returned no image data.");
 
       const imageDataUrl = `data:image/png;base64,${imageBase64}`;
-
       const assistantPayload = {
         type: "image",
         text: "Here is your generated image.",
@@ -572,12 +417,35 @@ export async function POST(request: Request) {
           imageUrl: assistantPayload.imageUrl,
           conversationId: conversation.id,
         },
-        {
-          headers: {
-            "X-Conversation-Id": String(conversation.id),
-          },
-        }
+        { headers: { "X-Conversation-Id": String(conversation.id) } }
       );
+    }
+
+    const hasFileAttachment = normalizedAttachments.some(
+      (a) => a.kind === "file" || (!isImageAttachment(a) && Boolean(a.base64))
+    );
+
+    if (hasFileAttachment) {
+      const answer = await answerWithFilesUsingResponsesAPI({
+        question,
+        attachments: normalizedAttachments,
+        conversationId: conversation.id,
+      });
+
+      await prisma.message.create({
+        data: {
+          conversationId: conversation.id,
+          role: "assistant",
+          content: answer,
+        },
+      });
+
+      return new Response(answer, {
+        headers: {
+          "Content-Type": "text/plain; charset=utf-8",
+          "X-Conversation-Id": String(conversation.id),
+        },
+      });
     }
 
     const recentMessagesDesc = await prisma.message.findMany({
@@ -587,57 +455,26 @@ export async function POST(request: Request) {
     });
 
     let recentMessages = recentMessagesDesc.reverse();
-
     if (regenerate && recentMessages.at(-1)?.role === "assistant") {
       recentMessages = recentMessages.slice(0, -1);
     }
 
     const historyMessages: ChatHistoryMessage[] = [];
-
     for (const msg of recentMessages) {
       if (msg.role === "user") {
         const parsed = parseUserMessageContent(msg.content);
-
         historyMessages.push({
           role: "user",
           content: await buildUserContent(parsed.text, parsed.attachments),
         });
       } else {
-        const expandedAssistantHistory = await assistantMessageToHistory(
-          msg.content
-        );
+        const expandedAssistantHistory = await assistantMessageToHistory(msg.content);
         historyMessages.push(...expandedAssistantHistory);
       }
     }
 
-    const dateContext = buildRealtimeDateContext();
-
     const messages: ChatHistoryMessage[] = [
-      {
-        role: "system",
-        content:
-          "You are Quran Assist, a respectful and knowledgeable Islamic assistant. " +
-          "Maintain conversational continuity and use the recent chat history carefully. " +
-          "For Islamic questions, ALWAYS include at least one directly relevant Quran reference when a relevant ayah exists. " +
-          "Do not invent ayah wording. If you are not fully sure of the exact Arabic or English wording, give only the Quran reference and a brief paraphrase. " +
-          "When citing Quran, use this exact parseable format on its own line after the explanation: Quran 2:153 — Indeed, Allah is with the patient. " +
-          "You may include multiple Quran citation lines, but keep each as: Quran SURAH:AYAH — short English meaning. " +
-          "For questions about patience/sabr, strongly consider Quran 2:153, Quran 2:155-157, Quran 3:200, Quran 39:10, and Quran 103:1-3 when relevant. " +
-          "For questions about prayer/salah, cite directly relevant Quran references when applicable, such as Quran 2:43, Quran 4:103, or Quran 29:45. " +
-          "For questions about hardship, trials, forgiveness, repentance, modesty, parents, character, or worship, include a relevant Quran reference when applicable. " +
-          "If a prior generated image is included as a reference in the conversation history, use it directly to answer follow-up questions about that image. " +
-          "If the user says 'this image', 'that image', or similar, first check whether a referenced image from earlier in the same conversation is present. " +
-          "If the user provides image attachments, analyze the visible contents directly. " +
-          "If the user provides uploaded files, use the extracted file text and any provided PDF page images to answer. Do not claim you cannot access the file when file content is included in the prompt. " +
-          "Do not claim you cannot view an image when an image is present in the conversation context. " +
-          "For time-sensitive questions, use the runtime date context below instead of guessing from stale model knowledge. " +
-          `Current runtime ISO date/time: ${dateContext.isoDate}. ` +
-          `Current UTC year: ${dateContext.utcYear}. ` +
-          `Current local year: ${dateContext.localYear}. ` +
-          `Current UTC date string: ${dateContext.prettyUtc}. ` +
-          `Current local date string: ${dateContext.prettyLocal}. ` +
-          "Be clear, helpful, and reasonably concise.",
-      },
+      { role: "system", content: buildSystemPrompt() },
       ...historyMessages,
     ];
 
