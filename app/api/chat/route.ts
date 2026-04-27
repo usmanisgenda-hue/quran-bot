@@ -11,6 +11,30 @@ function getAbsoluteUploadPath(previewUrl: string) {
   return path.join(process.cwd(), "public", normalized);
 }
 
+function getAttachmentExtension(attachment: StoredAttachment) {
+  const source = attachment.name || attachment.previewUrl || "";
+  return path.extname(source).toLowerCase();
+}
+
+function getAttachmentMimeType(attachment: StoredAttachment) {
+  return attachment.mimeType || attachment.type || "application/octet-stream";
+}
+
+async function getAttachmentBuffer(attachment: StoredAttachment) {
+  if (attachment.base64) {
+    const cleanBase64 = attachment.base64.includes(",")
+      ? attachment.base64.split(",").pop() || ""
+      : attachment.base64;
+
+    return Buffer.from(cleanBase64, "base64");
+  }
+
+  if (!attachment.previewUrl) return null;
+
+  const absolutePath = getAbsoluteUploadPath(attachment.previewUrl);
+  return await fs.readFile(absolutePath);
+}
+
 async function ocrImageBuffer(imageBuffer: Buffer) {
   const Tesseract = await import("tesseract.js");
   const result = await Tesseract.recognize(imageBuffer, "eng");
@@ -79,15 +103,24 @@ async function pdfPreviewToPageDataUrls(previewUrl: string, maxPages = 4) {
   });
 }
 
+async function pdfBufferToPageDataUrls(fileBuffer: Buffer, maxPages = 4) {
+  const pageImages = await renderPdfPagesToImageBuffers(fileBuffer, maxPages);
+
+  return pageImages.map((buffer) => {
+    const base64 = buffer.toString("base64");
+    return `data:image/png;base64,${base64}`;
+  });
+}
+
 function getFileExtensionFromPreviewUrl(previewUrl: string) {
   return path.extname(getAbsoluteUploadPath(previewUrl)).toLowerCase();
 }
 
-async function extractTextFromFile(previewUrl: string) {
-  const absolutePath = getAbsoluteUploadPath(previewUrl);
-  const ext = path.extname(absolutePath).toLowerCase();
+async function extractTextFromAttachment(attachment: StoredAttachment) {
+  const fileBuffer = await getAttachmentBuffer(attachment);
+  if (!fileBuffer) return "";
 
-  const fileBuffer = await fs.readFile(absolutePath);
+  const ext = getAttachmentExtension(attachment);
 
   if (ext === ".pdf") {
     try {
@@ -117,8 +150,14 @@ async function extractTextFromFile(previewUrl: string) {
   if ([".pptx", ".docx", ".xlsx"].includes(ext)) {
     const req = eval("require");
     const officeParser = req("officeparser");
-    const text = await officeParser.parseOfficeAsync(absolutePath);
-    return String(text || "").trim();
+
+    if (attachment.previewUrl) {
+      const absolutePath = getAbsoluteUploadPath(attachment.previewUrl);
+      const text = await officeParser.parseOfficeAsync(absolutePath);
+      return String(text || "").trim();
+    }
+
+    return "";
   }
 
   if ([".txt", ".md", ".csv"].includes(ext)) {
@@ -127,6 +166,7 @@ async function extractTextFromFile(previewUrl: string) {
 
   return "";
 }
+
 export const runtime = "nodejs";
 
 const client = new OpenAI({
@@ -138,6 +178,9 @@ type StoredAttachment = {
   name?: string;
   kind?: "image" | "file";
   previewUrl?: string;
+  base64?: string;
+  type?: string;
+  mimeType?: string;
 };
 
 type ChatContentPart =
@@ -227,25 +270,23 @@ async function buildUserContent(
 ): Promise<string | ChatContentPart[]> {
   const imageAttachments = attachments.filter(
     (attachment) =>
-      attachment.kind === "image" && typeof attachment.previewUrl === "string"
+      attachment.kind === "image" && (typeof attachment.previewUrl === "string" || typeof attachment.base64 === "string")
   );
 
   const fileAttachments = attachments.filter(
     (attachment) =>
-      attachment.kind === "file" && typeof attachment.previewUrl === "string"
+      attachment.kind === "file" && (typeof attachment.previewUrl === "string" || typeof attachment.base64 === "string")
   );
 
   let fileContext = "";
   const visualFileParts: ChatContentPart[] = [];
 
   for (const attachment of fileAttachments) {
-    if (!attachment.previewUrl) continue;
-
     const fileName = attachment.name || "attached file";
-    const ext = getFileExtensionFromPreviewUrl(attachment.previewUrl);
+    const ext = getAttachmentExtension(attachment);
 
     try {
-      const fileText = await extractTextFromFile(attachment.previewUrl);
+      const fileText = await extractTextFromAttachment(attachment);
 
       if (fileText) {
         const limitedFileText = fileText.slice(0, 24000);
@@ -260,10 +301,12 @@ async function buildUserContent(
 
       if (ext === ".pdf") {
         try {
-          const pageDataUrls = await pdfPreviewToPageDataUrls(
-            attachment.previewUrl,
-            4
-          );
+          const fileBuffer = await getAttachmentBuffer(attachment);
+          const pageDataUrls = fileBuffer
+            ? await pdfBufferToPageDataUrls(fileBuffer, 4)
+            : attachment.previewUrl
+              ? await pdfPreviewToPageDataUrls(attachment.previewUrl, 4)
+              : [];
 
           if (pageDataUrls.length > 0) {
             visualFileParts.push({
@@ -304,10 +347,15 @@ async function buildUserContent(
   const parts: ChatContentPart[] = [{ type: "text", text: finalText }];
 
   for (const attachment of imageAttachments) {
-    if (!attachment.previewUrl) continue;
-
     try {
-      const dataUrl = await imagePreviewToDataUrl(attachment.previewUrl);
+      const mimeType = getAttachmentMimeType(attachment);
+      const dataUrl = attachment.base64
+        ? `data:${mimeType};base64,${attachment.base64}`
+        : attachment.previewUrl
+          ? await imagePreviewToDataUrl(attachment.previewUrl)
+          : "";
+
+      if (!dataUrl) continue;
 
       parts.push({
         type: "image_url",

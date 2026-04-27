@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { mkdir, writeFile } from "fs/promises";
 import path from "path";
 
+export const runtime = "nodejs";
+
 export async function POST(req: Request) {
   try {
     const formData = await req.formData();
@@ -26,7 +28,9 @@ export async function POST(req: Request) {
     return NextResponse.json({
       url: `/uploads/${filename}`,
       name: file.name,
-      type: file.type,
+      type: file.type || "application/octet-stream",
+      size: file.size,
+      base64: buffer.toString("base64"),
     });
   } catch (error) {
     console.error("Upload failed:", error);
