@@ -215,12 +215,9 @@ async function extractTextFromAttachment(attachment: StoredAttachment) {
   const fileBuffer = attachmentToBuffer(attachment);
 
   if (!fileBuffer) {
-    console.warn(
-      "Attachment had no inline base64. Cannot read Railway /public/uploads reliably:",
-      attachment.name || attachment.previewUrl || "unnamed attachment"
-    );
-    return "";
-  }
+  console.warn("Skipping old attachment without base64:", attachment.name);
+  return "";
+}
 
   const ext = getAttachmentExtension(attachment);
   const mimeType = getAttachmentMimeType(attachment);
