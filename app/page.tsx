@@ -712,10 +712,16 @@ export default function Home() {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        question: effectiveQuestion,
-        conversationId,
-        attachments: outgoingAttachments,
-      }),
+  question: effectiveQuestion,
+  conversationId,
+  attachments: outgoingAttachments,
+  history: chatHistory.map((chat) => ({
+  question: chat.question,
+  answer: chat.answer,
+  imageUrl: chat.imageUrl,
+  attachments: chat.attachments ?? [],
+})),
+}),
     });
 
     if (!response.ok || !response.body) {
