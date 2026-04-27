@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import path from "path";
 
 export const runtime = "nodejs";
+export const maxDuration = 60;
 
 const client = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
@@ -230,6 +231,20 @@ function buildSystemPrompt() {
   );
 }
 
+function makeSafeAttachmentForDb(attachment: StoredAttachment) {
+  // Do not store huge base64 blobs in Prisma/local chat history.
+  // The uploaded file is sent to OpenAI during the same request.
+  return {
+    id: attachment.id,
+    name: attachment.name,
+    kind: attachment.kind,
+    previewUrl: attachment.previewUrl,
+    type: attachment.type,
+    mimeType: attachment.mimeType,
+    size: attachment.size,
+  };
+}
+
 async function buildUserContent(
   text: string,
   attachments: StoredAttachment[] = []
@@ -254,6 +269,24 @@ async function buildUserContent(
   return parts;
 }
 
+async function uploadAttachmentToOpenAI(attachment: StoredAttachment) {
+  const base64 = cleanBase64(attachment.base64);
+  if (!base64) return null;
+
+  const buffer = Buffer.from(base64, "base64");
+  const mimeType = getAttachmentMimeType(attachment);
+  const filename = attachment.name || `uploaded${getAttachmentExtension(attachment) || ".file"}`;
+
+  const file = new File([new Uint8Array(buffer)], filename, { type: mimeType });
+
+  const uploaded = await client.files.create({
+    file,
+    purpose: "user_data",
+  } as any);
+
+  return uploaded.id;
+}
+
 async function answerWithFilesUsingResponsesAPI(args: {
   question: string;
   attachments: StoredAttachment[];
@@ -261,7 +294,7 @@ async function answerWithFilesUsingResponsesAPI(args: {
 }) {
   const { question, attachments, conversationId } = args;
 
-  const content: any[] = [
+  const inputContent: any[] = [
     {
       type: "input_text",
       text: question || "Please summarize the uploaded file.",
@@ -276,24 +309,50 @@ async function answerWithFilesUsingResponsesAPI(args: {
     }
 
     const mimeType = getAttachmentMimeType(attachment);
-    const filename = attachment.name || `uploaded${getAttachmentExtension(attachment) || ".file"}`;
 
     if (mimeType.startsWith("image/")) {
-      content.push({
+      inputContent.push({
         type: "input_image",
         image_url: `data:${mimeType};base64,${base64}`,
       });
-    } else {
-      content.push({
-        type: "input_file",
-        filename,
-        file_data: `data:${mimeType};base64,${base64}`,
-      });
+      continue;
     }
+
+    const fileId = await uploadAttachmentToOpenAI(attachment);
+    if (!fileId) continue;
+
+    inputContent.push({
+      type: "input_file",
+      file_id: fileId,
+    });
   }
 
-  if (content.length === 1) {
+  if (inputContent.length === 1) {
     return "I received the file bubble, but the actual file content was not sent. Please re-upload the file in a new chat and try again.";
+  }
+
+  const recentMessagesDesc = await prisma.message.findMany({
+    where: { conversationId },
+    orderBy: { createdAt: "desc" },
+    take: 8,
+  });
+
+  const historyText = recentMessagesDesc
+    .reverse()
+    .map((msg) => {
+      if (msg.role === "user") {
+        const parsed = parseUserMessageContent(msg.content);
+        return `User: ${parsed.text}`;
+      }
+      return `Assistant: ${msg.content}`;
+    })
+    .join("\n");
+
+  if (historyText.trim()) {
+    inputContent.unshift({
+      type: "input_text",
+      text: `Recent conversation context:\n${historyText}`,
+    });
   }
 
   const response = await client.responses.create({
@@ -302,7 +361,7 @@ async function answerWithFilesUsingResponsesAPI(args: {
     input: [
       {
         role: "user",
-        content,
+        content: inputContent,
       },
     ],
   } as any);
@@ -371,6 +430,8 @@ export async function POST(request: Request) {
       });
     }
 
+    const safeAttachmentsForDb = normalizedAttachments.map(makeSafeAttachmentForDb);
+
     if (!regenerate) {
       await prisma.message.create({
         data: {
@@ -378,7 +439,7 @@ export async function POST(request: Request) {
           role: "user",
           content: JSON.stringify({
             text: question,
-            attachments: normalizedAttachments,
+            attachments: safeAttachmentsForDb,
           }),
         },
       });

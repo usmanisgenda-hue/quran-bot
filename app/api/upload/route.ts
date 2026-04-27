@@ -23,7 +23,11 @@ export async function POST(req: Request) {
     const filename = `${Date.now()}-${safeName}`;
     const filePath = path.join(uploadsDir, filename);
 
-    await writeFile(filePath, buffer);
+    // This preview URL is only for UI display. The chat route uses base64 instead,
+    // because Railway's filesystem is not reliable between requests/deploys.
+    await writeFile(filePath, buffer).catch((error) => {
+      console.warn("Preview file save failed; continuing with base64 upload:", error);
+    });
 
     return NextResponse.json({
       url: `/uploads/${filename}`,
@@ -37,3 +41,4 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Upload failed" }, { status: 500 });
   }
 }
+
