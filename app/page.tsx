@@ -225,10 +225,12 @@ function ChatGPTTypingIndicator() {
 function GeneratedImageCard({
   imageUrl,
   onCopy,
+  onOpen,
   copied,
 }: {
   imageUrl: string;
   onCopy: () => void;
+  onOpen: () => void;
   copied: boolean;
 }) {
   return (
@@ -252,16 +254,14 @@ function GeneratedImageCard({
           >
             {copied ? <span className="text-xs font-bold">✓</span> : <Copy size={15} />}
           </button>
-
-          <a
-            href={imageUrl}
-            target="_blank"
-            rel="noreferrer"
+          <button
+            type="button"
+            onClick={onOpen}
             className="flex h-9 w-9 items-center justify-center rounded-full border border-[#d4af37]/25 bg-[#062927]/80 text-[#f5d76e] transition hover:-translate-y-0.5 hover:border-[#f5d76e]/60 hover:bg-[#123f3b] hover:shadow-[0_0_18px_rgba(212,175,55,0.2)]"
             title="Open full image"
           >
             <Maximize2 size={15} />
-          </a>
+          </button>
 
           <a
             href={imageUrl}
@@ -279,8 +279,8 @@ function GeneratedImageCard({
         <img
           src={imageUrl}
           alt="Generated image"
-          onClick={() => window.open(imageUrl, "_blank")}
-          className="relative max-h-[560px] w-full rounded-2xl object-contain shadow-[0_14px_45px_rgba(0,0,0,0.35)]"
+          onClick={onOpen}
+          className="relative cursor-zoom-in max-h-[560px] w-full rounded-2xl object-contain shadow-[0_14px_45px_rgba(0,0,0,0.35)]"
         />
       </div>
     </div>
@@ -304,6 +304,7 @@ export default function Home() {
   const [streamBuffer, setStreamBuffer] = useState("");
   const [displayedAnswer, setDisplayedAnswer] = useState("");
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [fullscreenImage, setFullscreenImage] = useState<string | null>(null);
 
   const [isListening, setIsListening] = useState(false);
   const [autoSendAfterVoice, setAutoSendAfterVoice] = useState(false);
@@ -1543,6 +1544,7 @@ export default function Home() {
                                 imageUrl={chat.imageUrl}
                                 copied={copiedKey === `image-${index}`}
                                 onCopy={() => handleCopy(chat.imageUrl || "", `image-${index}`)}
+                              onOpen={() => setFullscreenImage(chat.imageUrl || null)}
                               />
                             )}
 
@@ -1637,6 +1639,28 @@ export default function Home() {
           </>
         )}
       </main>
+      {fullscreenImage && (
+        <div
+          className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/90 p-6 backdrop-blur-sm"
+          onClick={() => setFullscreenImage(null)}
+        >
+          <button
+            type="button"
+            onClick={() => setFullscreenImage(null)}
+            className="absolute right-6 top-6 z-[10000] flex h-11 w-11 items-center justify-center rounded-full border border-[#d4af37]/40 bg-black/60 text-xl text-[#f5d76e] shadow-lg transition hover:bg-black/80 hover:text-[#ffe082]"
+            title="Close fullscreen image"
+          >
+            ×
+          </button>
+
+          <img
+            src={fullscreenImage}
+            alt="Fullscreen generated image"
+            className="max-h-[90vh] max-w-[90vw] rounded-2xl object-contain shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          />
+        </div>
+      )}
 
       <style jsx global>{`
         .qa-message-enter {
