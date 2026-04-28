@@ -360,7 +360,45 @@ export async function POST(request: Request) {
     if (!safeQuestion.trim() && safeAttachments.length === 0) {
       return new Response("Question or attachment is required.", { status: 400 });
     }
+// IMAGE GENERATION REQUEST
+if (question.toLowerCase().includes("create an image") ||
+    question.toLowerCase().includes("generate an image") ||
+    question.toLowerCase().includes("make an image")) {
+  try {
+    const imagePrompt = question
+      .replace(/create an image of/gi, "")
+      .replace(/generate an image of/gi, "")
+      .replace(/make an image of/gi, "")
+      .trim();
 
+    const imageResponse = await client.images.generate({
+      model: "gpt-image-1",
+      prompt: imagePrompt,
+      size: "1024x1024",
+    });
+
+    const base64Image = imageResponse.data?.[0]?.b64_json;
+
+    if (!base64Image) {
+      throw new Error("No image returned from OpenAI.");
+    }
+
+    const imageUrl = `data:image/png;base64,${base64Image}`;
+
+    return Response.json({
+      answer: "Here is your generated image:",
+      imageUrl,
+    });
+  } catch (error) {
+    console.error("Image generation failed:", error);
+
+    return Response.json({
+      answer:
+        "I couldn’t generate that image. The image API failed. Try again.",
+      imageUrl: "",
+    });
+  }
+}
     let conversation =
       typeof conversationId === "number"
         ? await prisma.conversation.findUnique({ where: { id: conversationId } })
