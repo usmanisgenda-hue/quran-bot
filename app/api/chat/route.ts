@@ -605,3 +605,4 @@ export async function POST(request: Request) {
     return new Response(`Something went wrong: ${message}`, { status: 500 });
   }
 }
+
