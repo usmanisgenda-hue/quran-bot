@@ -712,16 +712,16 @@ export default function Home() {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-  question: effectiveQuestion,
-  conversationId,
-  attachments: outgoingAttachments,
-  history: chatHistory.map((chat) => ({
-  question: chat.question,
-  answer: chat.answer,
-  imageUrl: chat.imageUrl,
-  attachments: chat.attachments ?? [],
-})),
-}),
+        question: effectiveQuestion,
+        conversationId,
+        attachments: outgoingAttachments,
+        history: chatHistory.map((chat) => ({
+          question: chat.question,
+          answer: chat.answer,
+          imageUrl: chat.imageUrl,
+          attachments: chat.attachments ?? [],
+        })),
+      }),
     });
 
     if (!response.ok || !response.body) {
@@ -823,62 +823,78 @@ export default function Home() {
     );
 
     try {
-  const response = await fetch("/api/chat", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      question: lastQuestion,
-      conversationId,
-      regenerate: true,
-      attachments: lastChat.attachments ?? [],
-    }),
-  });
+      const response = await fetch("/api/chat", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          question: lastQuestion,
+          conversationId,
+          regenerate: true,
+          attachments: lastChat.attachments ?? [],
+          history: chatHistory.slice(0, -1).map((chat) => ({
+            question: chat.question,
+            answer: chat.answer,
+            imageUrl: chat.imageUrl,
+            attachments: chat.attachments ?? [],
+          })),
+        }),
+      });
 
-  if (!response.ok) {
-    throw new Error("Regenerate failed");
-  }
+      if (!response.ok || !response.body) {
+        const errorText = await response.text();
+        console.error("API /api/chat regenerate failed:", response.status, errorText);
+        throw new Error(`Regenerate failed: ${response.status} ${errorText}`);
+      }
 
-  const text = await response.text();
+      const contentType = response.headers.get("Content-Type") || "";
+      let finalAnswer = "";
+      let finalImageUrl = "";
 
-  let finalAnswer = text;
-  let finalImageUrl: string | undefined = undefined;
+      if (contentType.includes("application/json")) {
+        const data = await response.json();
+        finalAnswer = data.answer || data.text || "";
+        finalImageUrl = data.imageUrl || "";
+        setStreamBuffer(finalAnswer);
+        setDisplayedAnswer(finalAnswer);
+      } else {
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
 
-  try {
-    const data = JSON.parse(text);
-    finalAnswer = data.answer || "";
-    finalImageUrl = data.imageUrl || undefined;
-  } catch {
-    // not JSON → normal text response
-    finalAnswer = text;
-  }
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
 
-  setChatHistory((prev) =>
-    prev.map((chat, index) =>
-      index === prev.length - 1
-        ? {
-            ...chat,
-            answer: finalAnswer,
-            imageUrl: finalImageUrl,
-          }
-        : chat
-    )
-  );
-} catch (error) {
-  console.error(error);
+          const chunk = decoder.decode(value, { stream: true });
+          finalAnswer += chunk;
+          setStreamBuffer(finalAnswer);
+        }
 
-  setChatHistory((prev) =>
-    prev.map((chat, index) =>
-      index === prev.length - 1
-        ? {
-            ...chat,
-            answer: "Error regenerating response.",
-          }
-        : chat
-    )
-  );
-}  finally {
+        finalImageUrl = extractImageUrlFromMarkdown(finalAnswer);
+        finalAnswer = removeMarkdownImages(finalAnswer) || finalAnswer;
+        setDisplayedAnswer(finalAnswer);
+      }
+
+      setChatHistory((prev) =>
+        prev.map((chat, index) =>
+          index === prev.length - 1
+            ? { ...chat, answer: finalAnswer, imageUrl: finalImageUrl || undefined }
+            : chat
+        )
+      );
+
+      await fetchConversations();
+    } catch (error) {
+      console.error(error);
+      setChatHistory((prev) =>
+        prev.map((chat, index) =>
+          index === prev.length - 1
+            ? { ...chat, answer: "Something went wrong." }
+            : chat
+        )
+      );
+    } finally {
       setLoading(false);
       setStreamBuffer("");
       setDisplayedAnswer("");
@@ -920,6 +936,12 @@ export default function Home() {
           conversationId,
           editPrompt: true,
           attachments: chatHistory[index]?.attachments ?? [],
+          history: chatHistory.slice(0, index).map((chat) => ({
+            question: chat.question,
+            answer: chat.answer,
+            imageUrl: chat.imageUrl,
+            attachments: chat.attachments ?? [],
+          })),
         }),
       });
 
@@ -929,24 +951,37 @@ export default function Home() {
   throw new Error(`Request failed: ${response.status} ${errorText}`);
 }
 
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
+      const contentType = response.headers.get("Content-Type") || "";
       let finalAnswer = "";
+      let finalImageUrl = "";
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        const chunk = decoder.decode(value, { stream: true });
-        finalAnswer += chunk;
+      if (contentType.includes("application/json")) {
+        const data = await response.json();
+        finalAnswer = data.answer || data.text || "";
+        finalImageUrl = data.imageUrl || "";
         setStreamBuffer(finalAnswer);
-      }
+        setDisplayedAnswer(finalAnswer);
+      } else {
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
 
-      setDisplayedAnswer(finalAnswer);
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          const chunk = decoder.decode(value, { stream: true });
+          finalAnswer += chunk;
+          setStreamBuffer(finalAnswer);
+        }
+
+        finalImageUrl = extractImageUrlFromMarkdown(finalAnswer);
+        finalAnswer = removeMarkdownImages(finalAnswer) || finalAnswer;
+        setDisplayedAnswer(finalAnswer);
+      }
 
       setChatHistory((prev) =>
         prev.map((chat, i) =>
-          i === index ? { ...chat, answer: finalAnswer } : chat
+          i === index ? { ...chat, answer: finalAnswer, imageUrl: finalImageUrl || undefined } : chat
         )
       );
 
