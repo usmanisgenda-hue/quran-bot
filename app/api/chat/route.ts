@@ -120,6 +120,75 @@ async function saveGeneratedImage(base64: string) {
   return `/generated/${fileName}`;
 }
 
+async function saveGeneratedImageFromUrl(remoteUrl: string) {
+  const response = await fetch(remoteUrl);
+
+  if (!response.ok) {
+    throw new Error(`Could not download generated image: ${response.status} ${response.statusText}`);
+  }
+
+  const arrayBuffer = await response.arrayBuffer();
+  const generatedDir = path.join(process.cwd(), "public", "generated");
+  await fs.mkdir(generatedDir, { recursive: true });
+
+  const fileName = `quran-assist-${Date.now()}-${Math.random()
+    .toString(36)
+    .slice(2)}.png`;
+  const filePath = path.join(generatedDir, fileName);
+
+  await fs.writeFile(filePath, Buffer.from(arrayBuffer));
+  return `/generated/${fileName}`;
+}
+
+async function generateAndSaveImage(prompt: string) {
+  let firstError: unknown = null;
+
+  try {
+    const result = await client.images.generate({
+      model: "gpt-image-1",
+      prompt,
+      size: "1024x1024",
+    });
+
+    const imageBase64 = result.data?.[0]?.b64_json;
+    const remoteUrl = (result.data?.[0] as any)?.url as string | undefined;
+
+    if (imageBase64) return saveGeneratedImage(imageBase64);
+    if (remoteUrl) return saveGeneratedImageFromUrl(remoteUrl);
+
+    throw new Error("gpt-image-1 returned no b64_json or url.");
+  } catch (error) {
+    firstError = error;
+    console.error("gpt-image-1 failed, trying dall-e-3:", error);
+  }
+
+  try {
+    const fallback = await client.images.generate({
+      model: "dall-e-3",
+      prompt,
+      size: "1024x1024",
+      response_format: "url",
+    });
+
+    const imageBase64 = fallback.data?.[0]?.b64_json;
+    const remoteUrl = (fallback.data?.[0] as any)?.url as string | undefined;
+
+    if (imageBase64) return saveGeneratedImage(imageBase64);
+    if (remoteUrl) return saveGeneratedImageFromUrl(remoteUrl);
+
+    throw new Error("dall-e-3 returned no b64_json or url.");
+  } catch (fallbackError) {
+    console.error("dall-e-3 failed:", fallbackError);
+    throw new Error(
+      `Image generation failed. First error: ${
+        firstError instanceof Error ? firstError.message : String(firstError)
+      }. Fallback error: ${
+        fallbackError instanceof Error ? fallbackError.message : String(fallbackError)
+      }`
+    );
+  }
+}
+
 function attachmentToDataUrl(attachment: StoredAttachment) {
   if (attachment.base64) {
     if (attachment.base64.startsWith("data:")) return attachment.base64;
@@ -396,19 +465,7 @@ export async function POST(request: Request) {
       try {
         const prompt = cleanImagePrompt(safeQuestion) || safeQuestion.trim();
 
-        const result = await client.images.generate({
-          model: "gpt-image-1",
-          prompt,
-          size: "1024x1024",
-        });
-
-        const imageBase64 = result.data?.[0]?.b64_json;
-        const remoteUrl = (result.data?.[0] as any)?.url as string | undefined;
-        const imageUrl = imageBase64
-          ? await saveGeneratedImage(imageBase64)
-          : remoteUrl || "";
-
-        if (!imageUrl) throw new Error("Image generation returned no image data.");
+        const imageUrl = await generateAndSaveImage(prompt);
 
         const assistantPayload = {
           type: "image",
