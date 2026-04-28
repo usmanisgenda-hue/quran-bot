@@ -107,6 +107,19 @@ async function filePathToDataUrl(filePath: string) {
   return `data:${mimeType};base64,${base64}`;
 }
 
+async function saveGeneratedImage(base64: string) {
+  const generatedDir = path.join(process.cwd(), "public", "generated");
+  await fs.mkdir(generatedDir, { recursive: true });
+
+  const fileName = `quran-assist-${Date.now()}-${Math.random()
+    .toString(36)
+    .slice(2)}.png`;
+  const filePath = path.join(generatedDir, fileName);
+
+  await fs.writeFile(filePath, Buffer.from(base64, "base64"));
+  return `/generated/${fileName}`;
+}
+
 function attachmentToDataUrl(attachment: StoredAttachment) {
   if (attachment.base64) {
     if (attachment.base64.startsWith("data:")) return attachment.base64;
@@ -360,45 +373,6 @@ export async function POST(request: Request) {
     if (!safeQuestion.trim() && safeAttachments.length === 0) {
       return new Response("Question or attachment is required.", { status: 400 });
     }
-// IMAGE GENERATION REQUEST
-if (question.toLowerCase().includes("create an image") ||
-    question.toLowerCase().includes("generate an image") ||
-    question.toLowerCase().includes("make an image")) {
-  try {
-    const imagePrompt = question
-      .replace(/create an image of/gi, "")
-      .replace(/generate an image of/gi, "")
-      .replace(/make an image of/gi, "")
-      .trim();
-
-    const imageResponse = await client.images.generate({
-      model: "gpt-image-1",
-      prompt: imagePrompt,
-      size: "1024x1024",
-    });
-
-    const base64Image = imageResponse.data?.[0]?.b64_json;
-
-    if (!base64Image) {
-      throw new Error("No image returned from OpenAI.");
-    }
-
-    const imageUrl = `data:image/png;base64,${base64Image}`;
-
-    return Response.json({
-      answer: "Here is your generated image:",
-      imageUrl,
-    });
-  } catch (error) {
-    console.error("Image generation failed:", error);
-
-    return Response.json({
-      answer:
-        "I couldn’t generate that image. The image API failed. Try again.",
-      imageUrl: "",
-    });
-  }
-}
     let conversation =
       typeof conversationId === "number"
         ? await prisma.conversation.findUnique({ where: { id: conversationId } })
@@ -431,7 +405,7 @@ if (question.toLowerCase().includes("create an image") ||
         const imageBase64 = result.data?.[0]?.b64_json;
         const remoteUrl = (result.data?.[0] as any)?.url as string | undefined;
         const imageUrl = imageBase64
-          ? `data:image/png;base64,${imageBase64}`
+          ? await saveGeneratedImage(imageBase64)
           : remoteUrl || "";
 
         if (!imageUrl) throw new Error("Image generation returned no image data.");
